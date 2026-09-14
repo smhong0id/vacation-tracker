@@ -7,12 +7,14 @@ import {
   TEAMS,
 } from "./auth";
 import {
+  addDutyWeek,
   addLeave,
   deletePerson,
   ensureAdminAccount,
   isFirebaseEnabled,
   login,
   patchPerson,
+  removeDutyWeek,
   removeLeave,
   savePerson,
   setPersonPassword,
@@ -22,8 +24,10 @@ import {
   usernameTaken,
 } from "./storage";
 import {
-  DEFAULT_DUTY_INTERVAL_DAYS,
+  dutyWeekFromDate,
+  formatDutyWeek,
   localToday,
+  newDutyWeek,
   newLeave,
   newPerson,
   personSummary,
@@ -97,6 +101,9 @@ export default function App() {
   const leaves = selected
     ? [...(selected.used_leaves || [])].sort((a, b) => (a.date < b.date ? 1 : -1))
     : [];
+  const dutyWeeks = selected
+    ? [...(selected.duty_weeks || [])].sort((a, b) => (a.start < b.start ? 1 : -1))
+    : [];
 
   function persistSession(next) {
     setSession(next);
@@ -123,7 +130,6 @@ export default function App() {
       ...fields,
       username,
       passwordHash: await hashPassword(fields.password),
-      duty_start: fields.hasDuty ? fields.duty_start : null,
     });
     setBusy(true);
     try {
@@ -148,7 +154,6 @@ export default function App() {
       ...fields,
       username,
       passwordHash: await hashPassword(fields.password),
-      duty_start: fields.hasDuty ? fields.duty_start : null,
     });
     if (people.some((p) => p.name === personData.name)) {
       throw new Error("같은 이름이 이미 있습니다.");
@@ -167,33 +172,25 @@ export default function App() {
     const name = fields.name.trim();
     if (!name) throw new Error("이름을 입력하세요.");
     const username = normalizeUsername(fields.username);
-    if (isAdmin) {
-      if (!username) throw new Error("아이디를 입력하세요.");
-      if (await usernameTaken(username, selected.id)) {
-        throw new Error("이미 있는 아이디입니다.");
-      }
+    if (!username) throw new Error("아이디를 입력하세요.");
+    if (await usernameTaken(username, selected.id)) {
+      throw new Error("이미 있는 아이디입니다.");
     }
     const next = {
-      ...selected,
       name,
-      username: isAdmin ? username : selected.username,
+      username,
       team: fields.team,
       rank: fields.rank || "member",
       hire_date: fields.hire_date,
-      duty_start: fields.hasDuty ? fields.duty_start : null,
-      duty_interval_days: Number(fields.duty_interval_days) || DEFAULT_DUTY_INTERVAL_DAYS,
     };
     setBusy(true);
     try {
-      await patchPerson(selected.id, {
-        name: next.name,
-        username: next.username,
-        team: next.team,
-        rank: next.rank,
-        hire_date: next.hire_date,
-        duty_start: next.duty_start,
-        duty_interval_days: next.duty_interval_days,
-      });
+      await patchPerson(selected.id, next);
+      if (isEmployee) {
+        const nextSession = { ...session, username };
+        setSession(nextSession);
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify(nextSession));
+      }
       setSheet(null);
     } finally {
       setBusy(false);
@@ -227,6 +224,26 @@ export default function App() {
   async function onRemoveLeave(leaveId) {
     if (!selected) return;
     await removeLeave(selected.id, leaveId);
+  }
+
+  async function onAddDutyWeek(iso) {
+    if (!selected) return;
+    const week = newDutyWeek(iso);
+    if ((selected.duty_weeks || []).some((item) => item.start === week.start)) {
+      throw new Error("이미 등록된 당직 주간입니다.");
+    }
+    setBusy(true);
+    try {
+      await addDutyWeek(selected.id, week);
+      setSheet(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRemoveDutyWeek(weekId) {
+    if (!selected) return;
+    await removeDutyWeek(selected.id, weekId);
   }
 
   async function onChangePassword(password) {
@@ -279,16 +296,19 @@ export default function App() {
           selected={selected}
           summary={summary}
           leaves={leaves}
+          dutyWeeks={dutyWeeks}
           isAdmin={isAdmin}
           confirmDelete={confirmDelete}
           busy={busy}
           onBack={isAdmin ? () => setSelectedId("") : () => persistSession(null)}
           onAddLeave={() => setSheet("leave")}
+          onAddDutyWeek={() => setSheet("duty")}
           onChangePassword={() => setPasswordTarget(selected)}
           onEditPerson={() => setSheet("person-edit")}
           onAskDelete={() => setConfirmDelete(true)}
           onConfirmDelete={onDeletePerson}
           onRemoveLeave={onRemoveLeave}
+          onRemoveDutyWeek={onRemoveDutyWeek}
         />
       ) : showAdminHome ? (
         <AdminHome
@@ -327,12 +347,19 @@ export default function App() {
           onSubmit={onAddLeave}
         />
       )}
+      {sheet === "duty" && selected && (
+        <DutyWeekSheet
+          today={today}
+          busy={busy}
+          onClose={() => setSheet(null)}
+          onSubmit={onAddDutyWeek}
+        />
+      )}
       {sheet === "person-add" && isAdmin && (
         <PersonSheet
           title="사람 추가"
           busy={busy}
           today={today}
-          admin
           requireAccount
           requirePassword
           onClose={() => setSheet(null)}
@@ -344,8 +371,7 @@ export default function App() {
           title="정보 수정"
           busy={busy}
           today={today}
-          admin={isAdmin}
-          requireAccount={isAdmin}
+          requireAccount
           initial={selected}
           onClose={() => setSheet(null)}
           onSubmit={onEditPerson}
@@ -436,16 +462,19 @@ function PersonView({
   selected,
   summary,
   leaves,
+  dutyWeeks,
   isAdmin,
   confirmDelete,
   busy,
   onBack,
   onAddLeave,
+  onAddDutyWeek,
   onChangePassword,
   onEditPerson,
   onAskDelete,
   onConfirmDelete,
   onRemoveLeave,
+  onRemoveDutyWeek,
 }) {
   return (
     <>
@@ -474,9 +503,14 @@ function PersonView({
         </div>
       </section>
 
-      <button className="primary" onClick={onAddLeave}>
-        휴가 사용 등록
-      </button>
+      <div className="actions">
+        <button className="secondary" onClick={onAddDutyWeek}>
+          당직 주간 추가
+        </button>
+        <button className="primary" onClick={onAddLeave}>
+          휴가 사용 등록
+        </button>
+      </div>
 
       <section className="card" style={{ marginTop: 14 }}>
         <h2>사용 내역</h2>
@@ -498,18 +532,33 @@ function PersonView({
       </section>
 
       <section className="card">
+        <h2>당직 주간</h2>
+        <p className="muted">월요일~일요일 1주당 당직휴가 1일이 발생합니다. 연속 주도 각각 추가하세요.</p>
+        {dutyWeeks.length === 0 ? (
+          <p className="muted">등록된 당직 주간이 없습니다.</p>
+        ) : (
+          dutyWeeks.map((week) => (
+            <div className="row" key={week.id}>
+              <div>
+                <div>{formatDutyWeek(week)}</div>
+                <div className="muted">
+                  {week.start <= localToday() ? "당직휴가 1일" : "아직 발생 전"}
+                </div>
+              </div>
+              <button className="tiny" onClick={() => onRemoveDutyWeek(week.id)}>
+                삭제
+              </button>
+            </div>
+          ))
+        )}
+      </section>
+
+      <section className="card">
         <h2>계산 기준</h2>
         <ul className="criteria">
           <li>입사일: {selected.hire_date}</li>
-          <li>월 1개 연차 발생</li>
-          {selected.duty_start ? (
-            <>
-              <li>당직휴가 시작일: {selected.duty_start}</li>
-              <li>{summary.interval}일마다 1개 발생</li>
-            </>
-          ) : (
-            <li>당직휴가 없음</li>
-          )}
+          <li>월 1개 연차 발생 · 현재 {formatDay(summary.earnedAnnual)}일</li>
+          <li>당직 1주 = 휴가 1일 · 현재 {formatDay(summary.earnedDuty)}일</li>
         </ul>
       </section>
 
@@ -517,17 +566,15 @@ function PersonView({
         <button className="ghost" onClick={onChangePassword}>
           비밀번호 변경
         </button>
-        {isAdmin ? (
-          confirmDelete ? (
-            <button className="danger" disabled={busy} onClick={onConfirmDelete}>
-              정말 삭제
-            </button>
-          ) : (
-            <button className="ghost" onClick={onEditPerson}>
-              정보 수정
-            </button>
-          )
-        ) : null}
+        {confirmDelete ? (
+          <button className="danger" disabled={busy} onClick={onConfirmDelete}>
+            정말 삭제
+          </button>
+        ) : (
+          <button className="ghost" onClick={onEditPerson}>
+            정보 수정
+          </button>
+        )}
       </div>
       {isAdmin && !confirmDelete ? (
         <button className="danger" style={{ marginTop: 8 }} onClick={onAskDelete}>
@@ -562,7 +609,7 @@ function LoginSheet({ onClose, onSubmit }) {
       <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h3>로그인</h3>
         <label className="field">
-          <span>아이디</span>
+          <span>아이디 (점 포함 가능)</span>
           <input
             value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -639,12 +686,52 @@ function LeaveSheet({ today, busy, onClose, onSubmit }) {
   );
 }
 
+function DutyWeekSheet({ today, busy, onClose, onSubmit }) {
+  const [date, setDate] = useState(today);
+  const [error, setError] = useState("");
+  const week = dutyWeekFromDate(date);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await onSubmit(date);
+    } catch (err) {
+      setError(err.message || "저장에 실패했습니다.");
+    }
+  }
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3>당직 주간 추가</h3>
+        <p className="muted">
+          당직을 선 주의 아무 날짜나 고르면 월요일~일요일로 맞춰집니다. 1주당 휴가 1일입니다.
+        </p>
+        <label className="field">
+          <span>당직 날짜</span>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+        </label>
+        <p className="week-preview">{formatDutyWeek(week)} · 휴가 1일</p>
+        {error && <p className="warning">{error}</p>}
+        <div className="actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            취소
+          </button>
+          <button type="submit" className="primary" disabled={busy}>
+            추가
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function PersonSheet({
   title,
   busy,
   today,
   initial,
-  admin,
   requireAccount,
   requirePassword,
   onClose,
@@ -656,11 +743,6 @@ function PersonSheet({
   const [team, setTeam] = useState(initial?.team || "ta");
   const [rank, setRank] = useState(initial?.rank || "member");
   const [hireDate, setHireDate] = useState(initial?.hire_date || today);
-  const [hasDuty, setHasDuty] = useState(Boolean(initial?.duty_start));
-  const [dutyStart, setDutyStart] = useState(initial?.duty_start || today);
-  const [interval, setInterval] = useState(
-    initial?.duty_interval_days || DEFAULT_DUTY_INTERVAL_DAYS,
-  );
   const [error, setError] = useState("");
 
   async function submit(event) {
@@ -678,9 +760,6 @@ function PersonSheet({
         team,
         rank,
         hire_date: hireDate,
-        hasDuty,
-        duty_start: dutyStart,
-        duty_interval_days: interval,
       });
     } catch (err) {
       setError(err.message || "저장에 실패했습니다.");
@@ -697,7 +776,7 @@ function PersonSheet({
         </label>
         {requireAccount && (
           <label className="field">
-            <span>아이디</span>
+            <span>아이디 (점 포함 가능)</span>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -742,31 +821,6 @@ function PersonSheet({
           <span>입사일</span>
           <input type="date" value={hireDate} onChange={(e) => setHireDate(e.target.value)} required />
         </label>
-        {admin || !initial ? (
-          <>
-            <label className="check">
-              <input type="checkbox" checked={hasDuty} onChange={(e) => setHasDuty(e.target.checked)} />
-              당직 있음
-            </label>
-            {hasDuty && (
-              <>
-                <label className="field">
-                  <span>당직 시작일</span>
-                  <input type="date" value={dutyStart} onChange={(e) => setDutyStart(e.target.value)} />
-                </label>
-                <label className="field">
-                  <span>당직 주기(일)</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={interval}
-                    onChange={(e) => setInterval(e.target.value)}
-                  />
-                </label>
-              </>
-            )}
-          </>
-        ) : null}
         {error && <p className="warning">{error}</p>}
         <div className="actions">
           <button type="button" className="ghost" onClick={onClose}>

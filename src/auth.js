@@ -47,3 +47,7 @@ export function normalizeUsername(value) {
     .toLowerCase()
     .replace(/[^a-z0-9._-]/g, "");
 }
+
+export function usernameKey(username) {
+  return normalizeUsername(username).replace(/\./g, ",");
+}

@@ -1,5 +1,3 @@
-export const DEFAULT_DUTY_INTERVAL_DAYS = 21;
-
 export function localToday() {
   const d = new Date();
   const y = d.getFullYear();
@@ -22,13 +20,38 @@ function isValidDate({ y, m, d }) {
   return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
 }
 
-function addDays(iso, days) {
-  const { y, m, d } = parseIso(iso);
-  const dt = new Date(y, m - 1, d + days);
+function formatDate(dt) {
   const yy = dt.getFullYear();
   const mm = String(dt.getMonth() + 1).padStart(2, "0");
   const dd = String(dt.getDate()).padStart(2, "0");
   return `${yy}-${mm}-${dd}`;
+}
+
+export function addDays(iso, days) {
+  const { y, m, d } = parseIso(iso);
+  const dt = new Date(y, m - 1, d + days);
+  return formatDate(dt);
+}
+
+export function mondayOf(iso) {
+  const { y, m, d } = parseIso(iso);
+  const dt = new Date(y, m - 1, d);
+  const offset = (dt.getDay() + 6) % 7;
+  dt.setDate(dt.getDate() - offset);
+  return formatDate(dt);
+}
+
+export function sundayOf(mondayIso) {
+  return addDays(mondayIso, 6);
+}
+
+export function dutyWeekFromDate(iso) {
+  const start = mondayOf(iso);
+  return { start, end: sundayOf(start) };
+}
+
+export function formatDutyWeek(week) {
+  return `${week.start} ~ ${week.end}`;
 }
 
 export function monthlyLeaveCount(todayIso, hireIso) {
@@ -58,21 +81,13 @@ export function monthlyLeaveCount(todayIso, hireIso) {
   return count;
 }
 
-export function dutyLeaveCount(todayIso, startIso, intervalDays) {
-  if (!startIso || !intervalDays) return 0;
-  let count = 0;
-  let d = startIso;
-  while (d <= todayIso) {
-    count += 1;
-    d = addDays(d, intervalDays);
-  }
-  return count;
+export function dutyLeaveCount(todayIso, dutyWeeks) {
+  return (dutyWeeks || []).filter((week) => week.start && week.start <= todayIso).length;
 }
 
 export function personSummary(person, todayIso = localToday()) {
-  const interval = person.duty_interval_days || DEFAULT_DUTY_INTERVAL_DAYS;
   const earnedAnnual = monthlyLeaveCount(todayIso, person.hire_date);
-  const earnedDuty = dutyLeaveCount(todayIso, person.duty_start, interval);
+  const earnedDuty = dutyLeaveCount(todayIso, person.duty_weeks);
   const totalEarned = earnedAnnual + earnedDuty;
   const used = (person.used_leaves || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
   return {
@@ -81,15 +96,12 @@ export function personSummary(person, todayIso = localToday()) {
     totalEarned,
     used,
     remaining: totalEarned - used,
-    interval,
   };
 }
 
 export function newPerson({
   name,
   hire_date,
-  duty_start,
-  duty_interval_days,
   username,
   passwordHash,
   team,
@@ -103,8 +115,7 @@ export function newPerson({
     team: team || "",
     rank: rank || "member",
     hire_date,
-    duty_start: duty_start || null,
-    duty_interval_days: Number(duty_interval_days) || DEFAULT_DUTY_INTERVAL_DAYS,
+    duty_weeks: [],
     used_leaves: [],
   };
 }
@@ -117,6 +128,20 @@ export function newLeave({ date, type }) {
     amount,
     type,
   };
+}
+
+export function newDutyWeek(iso) {
+  const range = dutyWeekFromDate(iso);
+  return {
+    id: crypto.randomUUID(),
+    start: range.start,
+    end: range.end,
+  };
+}
+
+function listFromRecord(raw) {
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw : Object.values(raw);
 }
 
 export function peopleFromRecord(raw) {
@@ -134,10 +159,16 @@ export function peopleFromRecord(raw) {
         ...person,
         team,
         rank,
-        used_leaves: (Array.isArray(person.used_leaves)
-          ? person.used_leaves
-          : Object.values(person.used_leaves || {})
-        ).map((leave, index) => ({
+        duty_weeks: listFromRecord(person.duty_weeks).map((week, index) => {
+          const source = typeof week === "string" ? { start: week } : week;
+          const start = mondayOf(source.start || source.date);
+          return {
+            id: source.id || `duty-${person.id}-${index}-${start}`,
+            start,
+            end: source.end || sundayOf(start),
+          };
+        }),
+        used_leaves: listFromRecord(person.used_leaves).map((leave, index) => ({
           ...leave,
           id: leave.id || `legacy-${person.id}-${index}-${leave.date}`,
         })),

@@ -1,6 +1,6 @@
 import { getApps, initializeApp } from "firebase/app";
 import { get, getDatabase, onValue, ref, remove, set, update } from "firebase/database";
-import { countDashboardTeams, hashPassword, normalizeUsername } from "./auth";
+import { countDashboardTeams, hashPassword, normalizeUsername, usernameKey } from "./auth";
 import { firebaseConfig } from "./firebaseConfig";
 import { peopleFromRecord } from "./vacation";
 
@@ -32,10 +32,18 @@ function writeLocal(people) {
   localStorage.setItem(LOCAL_KEY, JSON.stringify({ people }));
 }
 
+function usernameIndexPath(username) {
+  return `usernames/${usernameKey(username)}`;
+}
+
 function personPayload(person) {
   const currentLeaves = {};
   for (const leave of person.used_leaves || []) {
     currentLeaves[leave.id] = leave;
+  }
+  const currentWeeks = {};
+  for (const week of person.duty_weeks || []) {
+    currentWeeks[week.id] = week;
   }
   return {
     id: person.id,
@@ -45,8 +53,7 @@ function personPayload(person) {
     team: person.team || "",
     rank: person.rank || "member",
     hire_date: person.hire_date,
-    duty_start: person.duty_start || null,
-    duty_interval_days: person.duty_interval_days || 21,
+    duty_weeks: currentWeeks,
     used_leaves: currentLeaves,
   };
 }
@@ -84,7 +91,7 @@ export async function ensureAdminAccount() {
       passwordHash,
     });
   }
-  await set(ref(db, `usernames/${ADMIN_USERNAME}`), { type: "admin" });
+  await set(ref(db, usernameIndexPath(ADMIN_USERNAME)), { type: "admin" });
   await refreshStatsFromDb();
 }
 
@@ -157,6 +164,18 @@ export function subscribePerson(personId, onData) {
   });
 }
 
+async function resolveUsernameRecord(id) {
+  const snap = await get(ref(db, usernameIndexPath(id)));
+  if (snap.exists()) return snap.val();
+  const peopleSnap = await get(ref(db, "people"));
+  const people = peopleSnap.exists() ? peopleFromRecord(peopleSnap.val()) : [];
+  const person = people.find((p) => normalizeUsername(p.username) === id);
+  if (!person) return null;
+  const rec = { type: "person", personId: person.id };
+  await set(ref(db, usernameIndexPath(id)), rec);
+  return rec;
+}
+
 export async function login(username, password) {
   const id = normalizeUsername(username);
   const passwordHash = await hashPassword(password);
@@ -173,11 +192,10 @@ export async function login(username, password) {
     return { type: "employee", username: person.username, personId: person.id };
   }
 
-  const userSnap = await get(ref(db, `usernames/${id}`));
-  if (!userSnap.exists()) {
+  const rec = await resolveUsernameRecord(id);
+  if (!rec) {
     throw new Error("아이디 또는 비밀번호가 올바르지 않습니다.");
   }
-  const rec = userSnap.val();
   if (rec.type === "admin") {
     const adminSnap = await get(ref(db, "admin"));
     const admin = adminSnap.val() || {};
@@ -200,13 +218,13 @@ async function updateUsernameIndex(person, previousUsername) {
   const prev = normalizeUsername(previousUsername);
   if (!isFirebaseEnabled) return;
   if (prev && prev !== next) {
-    await remove(ref(db, `usernames/${prev}`));
+    await remove(ref(db, usernameIndexPath(prev)));
   }
   if (next) {
     if (next === ADMIN_USERNAME) {
       throw new Error("admin 아이디는 사용할 수 없습니다.");
     }
-    await set(ref(db, `usernames/${next}`), { type: "person", personId: person.id });
+    await set(ref(db, usernameIndexPath(next)), { type: "person", personId: person.id });
   }
 }
 
@@ -264,7 +282,7 @@ export async function deletePerson(personId) {
   const currentSnap = await get(ref(db, `people/${personId}`));
   const current = currentSnap.val();
   if (current?.username) {
-    await remove(ref(db, `usernames/${normalizeUsername(current.username)}`));
+    await remove(ref(db, usernameIndexPath(current.username)));
   }
   await remove(ref(db, `people/${personId}`));
   await refreshStatsFromDb();
@@ -294,6 +312,30 @@ export async function removeLeave(personId, leaveId) {
   await remove(ref(db, `people/${personId}/used_leaves/${leaveId}`));
 }
 
+export async function addDutyWeek(personId, week) {
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    const person = data.people.find((p) => p.id === personId);
+    if (!person) return;
+    person.duty_weeks = [...(person.duty_weeks || []), week];
+    writeLocal(data.people);
+    return;
+  }
+  await set(ref(db, `people/${personId}/duty_weeks/${week.id}`), week);
+}
+
+export async function removeDutyWeek(personId, weekId) {
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    const person = data.people.find((p) => p.id === personId);
+    if (!person) return;
+    person.duty_weeks = (person.duty_weeks || []).filter((item) => item.id !== weekId);
+    writeLocal(data.people);
+    return;
+  }
+  await remove(ref(db, `people/${personId}/duty_weeks/${weekId}`));
+}
+
 export async function usernameTaken(username, exceptPersonId = "") {
   const id = normalizeUsername(username);
   if (!id) return false;
@@ -303,8 +345,7 @@ export async function usernameTaken(username, exceptPersonId = "") {
       (p) => normalizeUsername(p.username) === id && p.id !== exceptPersonId,
     );
   }
-  const snap = await get(ref(db, `usernames/${id}`));
-  if (!snap.exists()) return false;
-  const rec = snap.val();
+  const rec = await resolveUsernameRecord(id);
+  if (!rec) return false;
   return rec.type === "admin" || rec.personId !== exceptPersonId;
 }
