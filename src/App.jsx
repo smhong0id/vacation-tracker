@@ -7,6 +7,8 @@ import {
   TEAMS,
 } from "./auth";
 import {
+  addAccessGrant,
+  addBonusLeave,
   addDutyWeek,
   addLeave,
   deletePerson,
@@ -14,8 +16,11 @@ import {
   isFirebaseEnabled,
   login,
   patchPerson,
+  removeAccessGrant,
+  removeBonusLeave,
   removeDutyWeek,
   removeLeave,
+  updateLeave,
   savePerson,
   setPersonPassword,
   subscribePeople,
@@ -24,15 +29,20 @@ import {
   usernameTaken,
 } from "./storage";
 import {
+  ACCESS_SERVICES,
   dutyWeekFromDate,
   formatDutyWeek,
   formatLeaveType,
   LEAVE_FULL,
   LEAVE_HALF,
   localToday,
+  personHasLeaveOnDate,
+  newAccessGrant,
+  newBonusLeave,
   newDutyWeek,
   newLeave,
   newPerson,
+  patchLeaveFields,
   personSummary,
 } from "./vacation";
 
@@ -64,8 +74,10 @@ export default function App() {
   const [signupDraft, setSignupDraft] = useState(null);
   const [sheet, setSheet] = useState(null);
   const [passwordTarget, setPasswordTarget] = useState(null);
+  const [leaveEditTarget, setLeaveEditTarget] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [adminView, setAdminView] = useState("dashboard");
 
   const isAdmin = session?.type === "admin";
   const isEmployee = session?.type === "employee";
@@ -108,13 +120,24 @@ export default function App() {
   const dutyWeeks = selected
     ? [...(selected.duty_weeks || [])].sort((a, b) => (a.start < b.start ? 1 : -1))
     : [];
+  const bonusLeaves = selected
+    ? [...(selected.bonus_leaves || [])].sort((a, b) => (a.date < b.date ? 1 : -1))
+    : [];
+  const accessGrants = selected
+    ? [...(selected.access_grants || [])].sort((a, b) => {
+        if (a.service !== b.service) return a.service.localeCompare(b.service);
+        return a.end < b.end ? 1 : -1;
+      })
+    : [];
 
   function persistSession(next) {
     setSession(next);
     if (next) sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
     else sessionStorage.removeItem(SESSION_KEY);
     setSelectedId("");
+    setAdminView("dashboard");
     setConfirmDelete(false);
+    setLeaveEditTarget(null);
     setSheet(null);
   }
 
@@ -216,6 +239,9 @@ export default function App() {
 
   async function onAddLeave(fields) {
     if (!selected) return;
+    if (personHasLeaveOnDate(selected, fields.date)) {
+      throw new Error("이미 같은 날짜에 등록된 휴가가 있습니다.");
+    }
     const leave = newLeave(fields);
     setBusy(true);
     try {
@@ -229,6 +255,35 @@ export default function App() {
   async function onRemoveLeave(leaveId) {
     if (!selected) return;
     await removeLeave(selected.id, leaveId);
+  }
+
+  async function onEditLeave(fields) {
+    if (!selected || !leaveEditTarget) return;
+    const next = patchLeaveFields(leaveEditTarget, fields);
+    setBusy(true);
+    try {
+      await updateLeave(selected.id, next);
+      setLeaveEditTarget(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAddBonusLeave(fields) {
+    if (!selected) return;
+    const bonus = newBonusLeave(fields);
+    setBusy(true);
+    try {
+      await addBonusLeave(selected.id, bonus);
+      setSheet(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRemoveBonusLeave(bonusId) {
+    if (!selected) return;
+    await removeBonusLeave(selected.id, bonusId);
   }
 
   async function onAddDutyWeek(iso) {
@@ -251,6 +306,23 @@ export default function App() {
     await removeDutyWeek(selected.id, weekId);
   }
 
+  async function onAddAccessGrant(fields) {
+    if (!selected) return;
+    const grant = newAccessGrant(fields);
+    setBusy(true);
+    try {
+      await addAccessGrant(selected.id, grant);
+      setSheet(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRemoveAccessGrant(grantId) {
+    if (!selected) return;
+    await removeAccessGrant(selected.id, grantId);
+  }
+
   async function onChangePassword(password) {
     if (!passwordTarget) return;
     setBusy(true);
@@ -263,7 +335,8 @@ export default function App() {
   }
 
   const showPerson = Boolean(selected && (isAdmin || isEmployee));
-  const showAdminHome = isAdmin && !selectedId;
+  const showAdminDashboard = isAdmin && !selectedId && adminView === "dashboard";
+  const showAdminPeople = isAdmin && !selectedId && adminView === "people";
 
   return (
     <div className="app">
@@ -274,7 +347,9 @@ export default function App() {
             {selected
               ? `${selected.name}의 휴가 기록`
               : isAdmin
-                ? "관리자"
+                ? showAdminPeople
+                  ? "직원 관리"
+                  : "전체 휴가 현황"
                 : "팀 인원 현황"}
           </p>
         </div>
@@ -282,6 +357,11 @@ export default function App() {
           <div className={`badge ${mode === "shared" ? "shared" : ""}`}>
             {mode === "shared" ? "공유 저장 중" : "이 브라우저만"}
           </div>
+          {isAdmin ? (
+            <button className="linkish" onClick={() => persistSession(null)}>
+              로그아웃
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -297,22 +377,38 @@ export default function App() {
           summary={summary}
           leaves={leaves}
           dutyWeeks={dutyWeeks}
+          bonusLeaves={bonusLeaves}
+          accessGrants={accessGrants}
           isAdmin={isAdmin}
           confirmDelete={confirmDelete}
           busy={busy}
           onBack={isAdmin ? () => setSelectedId("") : () => persistSession(null)}
+          adminBackLabel={adminView === "people" ? "← 직원 목록" : "← 대시보드"}
           onAddLeave={() => setSheet("leave")}
+          onAddCustomLeave={() => setSheet("bonus-leave")}
           onAddDutyWeek={() => setSheet("duty")}
+          onAddAccessGrant={() => setSheet("access")}
           onChangePassword={() => setPasswordTarget(selected)}
           onEditPerson={() => setSheet("person-edit")}
           onAskDelete={() => setConfirmDelete(true)}
           onConfirmDelete={onDeletePerson}
+          onEditLeave={setLeaveEditTarget}
           onRemoveLeave={onRemoveLeave}
+          onRemoveBonusLeave={onRemoveBonusLeave}
           onRemoveDutyWeek={onRemoveDutyWeek}
+          onRemoveAccessGrant={onRemoveAccessGrant}
         />
-      ) : showAdminHome ? (
+      ) : showAdminDashboard ? (
+        <AdminDashboard
+          people={people}
+          today={today}
+          onManagePeople={() => setAdminView("people")}
+          onOpenPerson={setSelectedId}
+        />
+      ) : showAdminPeople ? (
         <AdminHome
           people={people}
+          onBack={() => setAdminView("dashboard")}
           onAddPerson={() => setSheet("person-add")}
           onOpenPerson={setSelectedId}
           onEditPassword={setPasswordTarget}
@@ -351,12 +447,36 @@ export default function App() {
           onSubmit={onAddLeave}
         />
       )}
+      {leaveEditTarget && selected && (
+        <LeaveEditSheet
+          leave={leaveEditTarget}
+          busy={busy}
+          onClose={() => setLeaveEditTarget(null)}
+          onSubmit={onEditLeave}
+        />
+      )}
+      {sheet === "bonus-leave" && selected && (
+        <BonusLeaveSheet
+          today={today}
+          busy={busy}
+          onClose={() => setSheet(null)}
+          onSubmit={onAddBonusLeave}
+        />
+      )}
       {sheet === "duty" && selected && (
         <DutyWeekSheet
           today={today}
           busy={busy}
           onClose={() => setSheet(null)}
           onSubmit={onAddDutyWeek}
+        />
+      )}
+      {sheet === "access" && selected && (
+        <AccessGrantSheet
+          today={today}
+          busy={busy}
+          onClose={() => setSheet(null)}
+          onSubmit={onAddAccessGrant}
         />
       )}
       {sheet === "person-add" && isAdmin && (
@@ -424,9 +544,189 @@ function Dashboard({ stats, onLogin, onSignup }) {
   );
 }
 
-function AdminHome({ people, onAddPerson, onOpenPerson, onEditPassword }) {
+function buildLeaveIndex(people) {
+  const byDate = {};
+  for (const person of people) {
+    for (const leave of person.used_leaves || []) {
+      if (!leave.date) continue;
+      if (!byDate[leave.date]) byDate[leave.date] = [];
+      byDate[leave.date].push({
+        personId: person.id,
+        name: person.name,
+        type: leave.type,
+        amount: leave.amount,
+        reason: leave.reason || "",
+      });
+    }
+  }
+  return byDate;
+}
+
+function calendarCells(year, month) {
+  const offset = (new Date(year, month - 1, 1).getDay() + 6) % 7;
+  const dim = new Date(year, month, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < offset; i += 1) cells.push(null);
+  for (let d = 1; d <= dim; d += 1) {
+    const mm = String(month).padStart(2, "0");
+    const dd = String(d).padStart(2, "0");
+    cells.push(`${year}-${mm}-${dd}`);
+  }
+  return cells;
+}
+
+function shiftMonth(year, month, delta) {
+  let m = month + delta;
+  let y = year;
+  while (m < 1) {
+    m += 12;
+    y -= 1;
+  }
+  while (m > 12) {
+    m -= 12;
+    y += 1;
+  }
+  return { year: y, month: m };
+}
+
+function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
+  const [y, m] = today.split("-").map(Number);
+  const [ym, setYm] = useState({ year: y, month: m });
+  const [selectedDate, setSelectedDate] = useState(today);
+  const leaveIndex = buildLeaveIndex(people);
+  const cells = calendarCells(ym.year, ym.month);
+
   return (
     <>
+      <section className="card">
+        <div className="card-head">
+          <h2>휴가 달력</h2>
+          <div className="calendar-nav">
+            <button
+              type="button"
+              className="ghost tiny"
+              onClick={() => setYm((prev) => shiftMonth(prev.year, prev.month, -1))}
+            >
+              ←
+            </button>
+            <strong>
+              {ym.year}년 {ym.month}월
+            </strong>
+            <button
+              type="button"
+              className="ghost tiny"
+              onClick={() => setYm((prev) => shiftMonth(prev.year, prev.month, 1))}
+            >
+              →
+            </button>
+          </div>
+        </div>
+        <div className="calendar-weekdays">
+          {["월", "화", "수", "목", "금", "토", "일"].map((label) => (
+            <span key={label}>{label}</span>
+          ))}
+        </div>
+        <div className="calendar-grid">
+          {cells.map((iso, index) => {
+            if (!iso) return <div className="calendar-cell empty" key={`e-${index}`} />;
+            const count = leaveIndex[iso]?.length || 0;
+            return (
+              <button
+                type="button"
+                key={iso}
+                className={[
+                  "calendar-cell",
+                  count ? "has-leave" : "",
+                  iso === today ? "today" : "",
+                  iso === selectedDate ? "selected" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={() => setSelectedDate(iso)}
+              >
+                <span>{Number(iso.slice(-2))}</span>
+                {count ? <em>{count}</em> : null}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>{selectedDate} 휴가</h2>
+        {!leaveIndex[selectedDate]?.length ? (
+          <p className="muted">이 날 등록된 휴가가 없습니다.</p>
+        ) : (
+          leaveIndex[selectedDate].map((item) => (
+            <div className="row" key={`${item.personId}-${item.type}-${item.reason}`}>
+              <div>
+                <button type="button" className="name-link" onClick={() => onOpenPerson(item.personId)}>
+                  {item.name}
+                </button>
+                <div className="muted">
+                  {formatLeaveType(item.type)} · {formatDay(item.amount)}일
+                  {item.reason ? ` · ${item.reason}` : ""}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </section>
+
+      <section className="card">
+        <h2>직원별 휴가 현황</h2>
+        {people.length === 0 ? (
+          <p className="muted">등록된 직원이 없습니다.</p>
+        ) : (
+          <div className="stats-table-wrap">
+            <table className="stats-table">
+              <thead>
+                <tr>
+                  <th>이름</th>
+                  <th>구분</th>
+                  <th>남음</th>
+                  <th>발생</th>
+                  <th>사용</th>
+                </tr>
+              </thead>
+              <tbody>
+                {people.map((p) => {
+                  const s = personSummary(p, today);
+                  return (
+                    <tr key={p.id}>
+                      <td>
+                        <button type="button" className="name-link" onClick={() => onOpenPerson(p.id)}>
+                          {p.name}
+                        </button>
+                      </td>
+                      <td className="muted">{personRoleLabel(p)}</td>
+                      <td>
+                        <strong>{formatDay(s.remaining)}</strong>
+                      </td>
+                      <td>{formatDay(s.totalEarned)}</td>
+                      <td>{formatDay(s.used)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <button className="primary" onClick={onManagePeople}>
+        직원 관리
+      </button>
+    </>
+  );
+}
+
+function AdminHome({ people, onBack, onAddPerson, onOpenPerson, onEditPassword }) {
+  return (
+    <>
+      <button className="back" onClick={onBack}>
+        ← 대시보드
+      </button>
       <section className="card">
         <h2>직원</h2>
         {people.length === 0 ? (
@@ -467,23 +767,31 @@ function PersonView({
   summary,
   leaves,
   dutyWeeks,
+  bonusLeaves,
+  accessGrants,
   isAdmin,
+  adminBackLabel,
   confirmDelete,
   busy,
   onBack,
   onAddLeave,
+  onAddCustomLeave,
   onAddDutyWeek,
+  onAddAccessGrant,
   onChangePassword,
   onEditPerson,
   onAskDelete,
   onConfirmDelete,
+  onEditLeave,
   onRemoveLeave,
+  onRemoveBonusLeave,
   onRemoveDutyWeek,
+  onRemoveAccessGrant,
 }) {
   return (
     <>
       <button className="back" onClick={onBack}>
-        {isAdmin ? "← 직원 목록" : "← 로그아웃"}
+        {isAdmin ? adminBackLabel : "← 로그아웃"}
       </button>
 
       <section className="card">
@@ -515,6 +823,16 @@ function PersonView({
           휴가 사용 등록
         </button>
       </div>
+      {!isAdmin ? (
+        <div className="actions" style={{ marginTop: 8 }}>
+          <button className="secondary" onClick={onAddCustomLeave}>
+            기타 휴가 추가
+          </button>
+          <button className="secondary" onClick={onAddAccessGrant}>
+            계정 이용 권한일
+          </button>
+        </div>
+      ) : null}
 
       <section className="card" style={{ marginTop: 14 }}>
         <h2>사용 내역</h2>
@@ -525,10 +843,40 @@ function PersonView({
             <div className="row" key={item.id}>
               <div>
                 <div>{item.date}</div>
-                <div className="muted">{formatLeaveType(item.type)}</div>
+                <div className="muted">
+                  {formatLeaveType(item.type)} · {formatDay(item.amount)}일
+                </div>
                 {item.reason ? <div className="leave-reason">{item.reason}</div> : null}
               </div>
-              <button className="tiny" onClick={() => onRemoveLeave(item.id)}>
+              <div className="row-actions">
+                <button className="tiny" onClick={() => onEditLeave(item)}>
+                  수정
+                </button>
+                <button className="tiny" onClick={() => onRemoveLeave(item.id)}>
+                  삭제
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </section>
+
+      <section className="card">
+        <h2>기타 휴가 (보상)</h2>
+        <p className="muted">특별 사유로 추가로 부여받은 휴가 일수입니다. 총 발생·남은 휴가에 합산됩니다.</p>
+        {bonusLeaves.length === 0 ? (
+          <p className="muted">등록된 기타 휴가가 없습니다.</p>
+        ) : (
+          bonusLeaves.map((item) => (
+            <div className="row" key={item.id}>
+              <div>
+                <div>
+                  +{formatDay(item.amount)}일
+                  {item.date ? <span className="muted"> · {item.date}</span> : null}
+                </div>
+                {item.reason ? <div className="leave-reason">{item.reason}</div> : null}
+              </div>
+              <button className="tiny" onClick={() => onRemoveBonusLeave(item.id)}>
                 삭제
               </button>
             </div>
@@ -559,11 +907,34 @@ function PersonView({
       </section>
 
       <section className="card">
+        <h2>계정 이용 권한일</h2>
+        <p className="muted">서비스별 계정 이용 만료일입니다.</p>
+        {accessGrants.length === 0 ? (
+          <p className="muted">등록된 권한일이 없습니다.</p>
+        ) : (
+          accessGrants.map((grant) => (
+            <div className="row" key={grant.id}>
+              <div>
+                <div className="access-service">{grant.service}</div>
+                <div className="muted">만료일 {grant.end}</div>
+              </div>
+              {!isAdmin ? (
+                <button className="tiny" onClick={() => onRemoveAccessGrant(grant.id)}>
+                  삭제
+                </button>
+              ) : null}
+            </div>
+          ))
+        )}
+      </section>
+
+      <section className="card">
         <h2>계산 기준</h2>
         <ul className="criteria">
-          <li>입사일: {selected.hire_date}</li>
-          <li>입사일 기준 월 1일 발생 · 현재 {formatDay(summary.earnedAnnual)}일</li>
+          <li>연차 생성 시작일: {selected.hire_date}</li>
+          <li>연차 생성 시작일 기준 월 1일 발생 · 현재 {formatDay(summary.earnedAnnual)}일</li>
           <li>당직 1주 = 휴가 1일 · 현재 {formatDay(summary.earnedDuty)}일</li>
+          <li>기타(보상) 휴가 · 현재 {formatDay(summary.earnedBonus)}일</li>
         </ul>
       </section>
 
@@ -686,6 +1057,171 @@ function LeaveSheet({ today, busy, onClose, onSubmit }) {
             maxLength={80}
             placeholder="한 줄로 적어 주세요"
           />
+        </label>
+        {error && <p className="warning">{error}</p>}
+        <div className="actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            취소
+          </button>
+          <button type="submit" className="primary" disabled={busy}>
+            추가
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function LeaveEditSheet({ leave, busy, onClose, onSubmit }) {
+  const [amount, setAmount] = useState(String(leave.amount));
+  const [reason, setReason] = useState(leave.reason || "");
+  const [error, setError] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await onSubmit({ amount: Number(amount), reason });
+    } catch (err) {
+      setError(err.message || "저장에 실패했습니다.");
+    }
+  }
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3>휴가 내역 수정</h3>
+        <label className="field">
+          <span>날짜</span>
+          <input type="date" value={leave.date} readOnly />
+        </label>
+        <label className="field">
+          <span>종류</span>
+          <div className="readonly-value">{formatLeaveType(leave.type)}</div>
+        </label>
+        <label className="field">
+          <span>일수</span>
+          <select value={amount} onChange={(e) => setAmount(e.target.value)}>
+            <option value="1">1일</option>
+            <option value="0.5">0.5일</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>사유</span>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            maxLength={80}
+            placeholder="한 줄로 적어 주세요"
+          />
+        </label>
+        {error && <p className="warning">{error}</p>}
+        <div className="actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            취소
+          </button>
+          <button type="submit" className="primary" disabled={busy}>
+            저장
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function BonusLeaveSheet({ today, busy, onClose, onSubmit }) {
+  const [date, setDate] = useState(today);
+  const [amount, setAmount] = useState("1");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await onSubmit({ date, amount, reason });
+    } catch (err) {
+      setError(err.message || "저장에 실패했습니다.");
+    }
+  }
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3>기타 휴가 추가</h3>
+        <p className="muted">보상·특별 사유로 휴가 일수를 추가로 부여합니다. 남은 휴가가 늘어납니다.</p>
+        <label className="field">
+          <span>부여일</span>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+        </label>
+        <label className="field">
+          <span>추가 일수</span>
+          <input
+            type="number"
+            min="0.5"
+            step="0.5"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            required
+          />
+        </label>
+        <label className="field">
+          <span>사유</span>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            maxLength={80}
+            placeholder="예: 주말 근무 보상"
+            required
+          />
+        </label>
+        {error && <p className="warning">{error}</p>}
+        <div className="actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            취소
+          </button>
+          <button type="submit" className="primary" disabled={busy}>
+            추가
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AccessGrantSheet({ today, busy, onClose, onSubmit }) {
+  const [service, setService] = useState("RBS");
+  const [end, setEnd] = useState(today);
+  const [error, setError] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await onSubmit({ service, end });
+    } catch (err) {
+      setError(err.message || "저장에 실패했습니다.");
+    }
+  }
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3>계정 이용 권한일</h3>
+        <p className="muted">서비스별 계정 이용 만료일을 등록합니다.</p>
+        <label className="field">
+          <span>구분자</span>
+          <select value={service} onChange={(e) => setService(e.target.value)}>
+            {Object.keys(ACCESS_SERVICES).map((key) => (
+              <option key={key} value={key}>
+                {ACCESS_SERVICES[key]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>만료일</span>
+          <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} required />
         </label>
         {error && <p className="warning">{error}</p>}
         <div className="actions">
@@ -848,7 +1384,7 @@ function PersonSheet({
           </select>
         </label>
         <label className="field">
-          <span>입사일</span>
+          <span>연차 생성 시작일</span>
           <input type="date" value={hireDate} onChange={(e) => setHireDate(e.target.value)} required />
         </label>
         {error && <p className="warning">{error}</p>}

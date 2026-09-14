@@ -243,6 +243,21 @@ button {
 
 .row:last-child { border-bottom: 0; }
 .row > div:first-child { min-width: 0; }
+
+.row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: none;
+}
+
+.readonly-value {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f3eee4;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
 .leave-reason {
   margin-top: 2px;
   font-size: 0.92rem;
@@ -348,6 +363,138 @@ button {
   text-align: center;
   padding: 40px 16px;
   color: var(--muted);
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.card-head h2 { margin: 0; }
+
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-nav strong {
+  min-width: 88px;
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.calendar-cell {
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 10px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 0.85rem;
+  position: relative;
+}
+
+.calendar-cell.empty {
+  border: 0;
+  background: transparent;
+}
+
+.calendar-cell.has-leave {
+  background: #e8f0eb;
+  border-color: #b8cfc0;
+}
+
+.calendar-cell.today {
+  border-color: var(--forest);
+  font-weight: 700;
+}
+
+.calendar-cell.selected {
+  background: var(--forest);
+  color: #f7f1e6;
+  border-color: var(--forest);
+}
+
+.calendar-cell.selected em {
+  background: #f7f1e6;
+  color: var(--forest);
+}
+
+.calendar-cell em {
+  font-style: normal;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 14px;
+  padding: 2px 4px;
+  border-radius: 999px;
+  background: var(--forest);
+  color: #f7f1e6;
+}
+
+.stats-table-wrap {
+  overflow-x: auto;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.stats-table th,
+.stats-table td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.stats-table th {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stats-table td strong {
+  color: var(--forest);
+}
+
+.name-link {
+  border: 0;
+  background: transparent;
+  color: var(--forest-2);
+  font-weight: 700;
+  padding: 0;
+  text-align: left;
+}
+
+.access-service {
+  font-weight: 700;
+  color: var(--forest);
 }
 
 @media (min-width: 700px) {

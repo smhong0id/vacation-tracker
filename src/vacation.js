@@ -88,11 +88,16 @@ export function dutyLeaveCount(todayIso, dutyWeeks) {
 export function personSummary(person, todayIso = localToday()) {
   const earnedAnnual = monthlyLeaveCount(todayIso, person.hire_date);
   const earnedDuty = dutyLeaveCount(todayIso, person.duty_weeks);
-  const totalEarned = earnedAnnual + earnedDuty;
+  const earnedBonus = (person.bonus_leaves || []).reduce(
+    (sum, item) => sum + Number(item.amount || 0),
+    0,
+  );
+  const totalEarned = earnedAnnual + earnedDuty + earnedBonus;
   const used = (person.used_leaves || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
   return {
     earnedAnnual,
     earnedDuty,
+    earnedBonus,
     totalEarned,
     used,
     remaining: totalEarned - used,
@@ -117,31 +122,104 @@ export function newPerson({
     hire_date,
     duty_weeks: [],
     used_leaves: [],
+    bonus_leaves: [],
+    access_grants: [],
   };
 }
 
 export const LEAVE_FULL = "하루 휴가";
 export const LEAVE_HALF = "반일 휴가";
 
+export const ACCESS_SERVICES = {
+  RBS: "RBS",
+  SCOP: "SCOP",
+  SBC: "SBC",
+};
+
 export function isHalfLeave(type) {
-  return type === LEAVE_HALF || type === "반차(0.5일)" || type === "반차";
+  const text = String(type || "");
+  return (
+    type === LEAVE_HALF ||
+    type === "반차(0.5일)" ||
+    type === "반차" ||
+    text.includes("반차")
+  );
 }
 
 export function formatLeaveType(type) {
-  if (isHalfLeave(type)) return LEAVE_HALF;
-  if (type === "연차(1일)" || type === "연차" || !type) return LEAVE_FULL;
+  if (!type) return LEAVE_FULL;
+  if (type === "연차(1일)" || type === "연차" || type === LEAVE_FULL) return LEAVE_FULL;
+  if (type === LEAVE_HALF || type === "반차(0.5일)" || type === "반차") return LEAVE_HALF;
   return type;
 }
 
+export function personHasLeaveOnDate(person, date) {
+  return (person?.used_leaves || []).some((item) => item.date === date);
+}
+
 export function newLeave({ date, type, reason }) {
-  const label = formatLeaveType(type);
+  const raw = String(type || "").trim();
+  const label = formatLeaveType(raw);
   const note = String(reason || "").trim();
   return {
     id: crypto.randomUUID(),
     date,
-    amount: isHalfLeave(type) ? 0.5 : 1,
+    amount: isHalfLeave(raw) ? 0.5 : 1,
     type: label,
     reason: note,
+  };
+}
+
+function isStandardLeaveType(type) {
+  return (
+    type === LEAVE_FULL ||
+    type === LEAVE_HALF ||
+    type === "연차(1일)" ||
+    type === "반차(0.5일)" ||
+    type === "연차" ||
+    type === "반차"
+  );
+}
+
+export function patchLeaveFields(leave, { amount, reason }) {
+  const nextAmount = Number(amount) === 0.5 ? 0.5 : 1;
+  return {
+    ...leave,
+    amount: nextAmount,
+    type: isStandardLeaveType(leave.type)
+      ? nextAmount === 0.5
+        ? LEAVE_HALF
+        : LEAVE_FULL
+      : leave.type,
+    reason: String(reason ?? "").trim(),
+  };
+}
+
+export function newBonusLeave({ amount, reason, date }) {
+  const days = Number(amount);
+  if (!Number.isFinite(days) || days <= 0) {
+    throw new Error("추가할 일수는 0보다 커야 합니다.");
+  }
+  const note = String(reason || "").trim();
+  if (!note) throw new Error("사유를 입력하세요.");
+  return {
+    id: crypto.randomUUID(),
+    date: date || localToday(),
+    amount: days,
+    reason: note,
+  };
+}
+
+export function newAccessGrant({ service, end }) {
+  const svc = String(service || "").trim().toUpperCase();
+  if (!ACCESS_SERVICES[svc]) {
+    throw new Error("구분자(RBS/SCOP/SBC)를 선택하세요.");
+  }
+  if (!end) throw new Error("만료일을 입력하세요.");
+  return {
+    id: crypto.randomUUID(),
+    service: svc,
+    end,
   };
 }
 
@@ -186,6 +264,17 @@ export function peopleFromRecord(raw) {
         used_leaves: listFromRecord(person.used_leaves).map((leave, index) => ({
           ...leave,
           id: leave.id || `legacy-${person.id}-${index}-${leave.date}`,
+        })),
+        bonus_leaves: listFromRecord(person.bonus_leaves).map((item, index) => ({
+          id: item.id || `bonus-${person.id}-${index}-${item.date}`,
+          date: item.date || "",
+          amount: Number(item.amount) || 0,
+          reason: item.reason || "",
+        })),
+        access_grants: listFromRecord(person.access_grants).map((grant, index) => ({
+          id: grant.id || `access-${person.id}-${index}-${grant.service}-${grant.end || grant.start}`,
+          service: String(grant.service || "").toUpperCase(),
+          end: grant.end || grant.start || "",
         })),
       };
     })

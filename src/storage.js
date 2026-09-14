@@ -2,7 +2,7 @@ import { getApps, initializeApp } from "firebase/app";
 import { get, getDatabase, onValue, ref, remove, set, update } from "firebase/database";
 import { countDashboardTeams, hashPassword, normalizeUsername, usernameKey } from "./auth";
 import { firebaseConfig } from "./firebaseConfig";
-import { peopleFromRecord } from "./vacation";
+import { peopleFromRecord, personHasLeaveOnDate } from "./vacation";
 
 const LOCAL_KEY = "vacation-tracker-data";
 const ADMIN_USERNAME = "admin";
@@ -45,6 +45,14 @@ function personPayload(person) {
   for (const week of person.duty_weeks || []) {
     currentWeeks[week.id] = week;
   }
+  const currentBonus = {};
+  for (const item of person.bonus_leaves || []) {
+    currentBonus[item.id] = item;
+  }
+  const currentGrants = {};
+  for (const grant of person.access_grants || []) {
+    currentGrants[grant.id] = grant;
+  }
   return {
     id: person.id,
     name: person.name,
@@ -55,6 +63,8 @@ function personPayload(person) {
     hire_date: person.hire_date,
     duty_weeks: currentWeeks,
     used_leaves: currentLeaves,
+    bonus_leaves: currentBonus,
+    access_grants: currentGrants,
   };
 }
 
@@ -293,9 +303,20 @@ export async function addLeave(personId, leave) {
     const data = readLocal();
     const person = data.people.find((p) => p.id === personId);
     if (!person) return;
+    if (personHasLeaveOnDate(person, leave.date)) {
+      throw new Error("이미 같은 날짜에 등록된 휴가가 있습니다.");
+    }
     person.used_leaves = [...(person.used_leaves || []), leave];
     writeLocal(data.people);
     return;
+  }
+  const personSnap = await get(ref(db, `people/${personId}`));
+  const rawLeaves = personSnap.val()?.used_leaves;
+  const existing = rawLeaves
+    ? (Array.isArray(rawLeaves) ? rawLeaves : Object.values(rawLeaves))
+    : [];
+  if (existing.some((item) => item.date === leave.date)) {
+    throw new Error("이미 같은 날짜에 등록된 휴가가 있습니다.");
   }
   await set(ref(db, `people/${personId}/used_leaves/${leave.id}`), leave);
 }
@@ -310,6 +331,24 @@ export async function removeLeave(personId, leaveId) {
     return;
   }
   await remove(ref(db, `people/${personId}/used_leaves/${leaveId}`));
+}
+
+export async function updateLeave(personId, leave) {
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    const person = data.people.find((p) => p.id === personId);
+    if (!person) return;
+    person.used_leaves = (person.used_leaves || []).map((item) =>
+      item.id === leave.id ? leave : item,
+    );
+    writeLocal(data.people);
+    return;
+  }
+  await update(ref(db, `people/${personId}/used_leaves/${leave.id}`), {
+    amount: leave.amount,
+    type: leave.type,
+    reason: leave.reason,
+  });
 }
 
 export async function addDutyWeek(personId, week) {
@@ -334,6 +373,54 @@ export async function removeDutyWeek(personId, weekId) {
     return;
   }
   await remove(ref(db, `people/${personId}/duty_weeks/${weekId}`));
+}
+
+export async function addBonusLeave(personId, bonus) {
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    const person = data.people.find((p) => p.id === personId);
+    if (!person) return;
+    person.bonus_leaves = [...(person.bonus_leaves || []), bonus];
+    writeLocal(data.people);
+    return;
+  }
+  await set(ref(db, `people/${personId}/bonus_leaves/${bonus.id}`), bonus);
+}
+
+export async function removeBonusLeave(personId, bonusId) {
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    const person = data.people.find((p) => p.id === personId);
+    if (!person) return;
+    person.bonus_leaves = (person.bonus_leaves || []).filter((item) => item.id !== bonusId);
+    writeLocal(data.people);
+    return;
+  }
+  await remove(ref(db, `people/${personId}/bonus_leaves/${bonusId}`));
+}
+
+export async function addAccessGrant(personId, grant) {
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    const person = data.people.find((p) => p.id === personId);
+    if (!person) return;
+    person.access_grants = [...(person.access_grants || []), grant];
+    writeLocal(data.people);
+    return;
+  }
+  await set(ref(db, `people/${personId}/access_grants/${grant.id}`), grant);
+}
+
+export async function removeAccessGrant(personId, grantId) {
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    const person = data.people.find((p) => p.id === personId);
+    if (!person) return;
+    person.access_grants = (person.access_grants || []).filter((item) => item.id !== grantId);
+    writeLocal(data.people);
+    return;
+  }
+  await remove(ref(db, `people/${personId}/access_grants/${grantId}`));
 }
 
 export async function usernameTaken(username, exceptPersonId = "") {
