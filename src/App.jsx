@@ -172,8 +172,7 @@ export default function App() {
 
       {mode === "local" && (
         <div className="warning">
-          지금은 이 휴대폰/PC에만 저장됩니다. 다른 사람도 같은 기록을 보고 고치려면 README의
-          Firebase 설정을 넣은 뒤 GitHub Pages에 배포하세요.
+          자신의 휴가를 관리하세요
         </div>
       )}
 
