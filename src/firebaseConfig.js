@@ -5,9 +5,10 @@
 export const firebaseConfig = {
   apiKey: "AIzaSyBtvQ0kG1YWCKRkzHlwQDIsbJ8_9rUUOyo",
   authDomain: "company-vacation.firebaseapp.com",
+  databaseURL: "https://company-vacation-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "company-vacation",
   storageBucket: "company-vacation.firebasestorage.app",
   messagingSenderId: "1090536639535",
   appId: "1:1090536639535:web:b4e884506e93a84c4ccada",
-  measurementId: "G-4JGKPDBX7D"
+  measurementId: "G-4JGKPDBX7D",
 };

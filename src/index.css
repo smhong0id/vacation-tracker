@@ -132,6 +132,32 @@ button {
   gap: 10px;
 }
 
+.metrics.two {
+  grid-template-columns: 1fr 1fr;
+}
+
+.top-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.linkish {
+  border: 0;
+  background: transparent;
+  color: var(--forest-2);
+  font-weight: 700;
+  padding: 0;
+}
+
+.role-tag {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .metric {
   background: #f3eee4;
   border-radius: 14px;
@@ -169,6 +195,42 @@ button {
 
 .overview th { color: var(--muted); font-weight: 600; }
 .overview tr.selected td { font-weight: 700; }
+.overview tbody tr { cursor: pointer; }
+.overview tbody tr:hover td { background: #f3eee4; }
+
+.back {
+  border: 0;
+  background: transparent;
+  color: var(--forest-2);
+  font-weight: 700;
+  padding: 0 0 12px;
+}
+
+.person-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.person-card {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: #fbf7f0;
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.person-card strong { font-size: 1.05rem; }
+.person-card .remain {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--forest);
+  letter-spacing: -0.04em;
+}
 
 .row {
   display: flex;
@@ -181,7 +243,7 @@ button {
 
 .row:last-child { border-bottom: 0; }
 
-.ghost, .primary, .danger, .tiny {
+.ghost, .primary, .secondary, .danger, .tiny {
   border-radius: 12px;
   border: 0;
   padding: 10px 14px;
@@ -194,9 +256,18 @@ button {
   font-weight: 700;
 }
 
+.secondary {
+  width: 100%;
+  background: #fffaf3;
+  color: var(--forest);
+  border: 2px solid var(--forest);
+  font-weight: 700;
+}
+
 .ghost {
-  background: #efe8dc;
-  color: var(--ink);
+  background: var(--paper);
+  color: var(--forest-2);
+  border: 1px solid var(--line);
 }
 
 .danger {

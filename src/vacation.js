@@ -85,10 +85,23 @@ export function personSummary(person, todayIso = localToday()) {
   };
 }
 
-export function newPerson({ name, hire_date, duty_start, duty_interval_days }) {
+export function newPerson({
+  name,
+  hire_date,
+  duty_start,
+  duty_interval_days,
+  username,
+  passwordHash,
+  team,
+  rank,
+}) {
   return {
     id: crypto.randomUUID(),
     name: name.trim(),
+    username: username || "",
+    passwordHash: passwordHash || "",
+    team: team || "",
+    rank: rank || "member",
     hire_date,
     duty_start: duty_start || null,
     duty_interval_days: Number(duty_interval_days) || DEFAULT_DUTY_INTERVAL_DAYS,
@@ -111,15 +124,24 @@ export function peopleFromRecord(raw) {
   const list = Array.isArray(raw) ? raw : Object.values(raw);
   return list
     .filter(Boolean)
-    .map((person) => ({
-      ...person,
-      used_leaves: (Array.isArray(person.used_leaves)
-        ? person.used_leaves
-        : Object.values(person.used_leaves || {})
-      ).map((leave, index) => ({
-        ...leave,
-        id: leave.id || `legacy-${person.id}-${index}-${leave.date}`,
-      })),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    .map((person) => {
+      const legacyTeam = person.team;
+      const team = legacyTeam === "ta" || legacyTeam === "dba" ? legacyTeam : "";
+      const rank =
+        person.rank ||
+        (legacyTeam === "pl" ? "pl" : legacyTeam === "pm" ? "pm" : "member");
+      return {
+        ...person,
+        team,
+        rank,
+        used_leaves: (Array.isArray(person.used_leaves)
+          ? person.used_leaves
+          : Object.values(person.used_leaves || {})
+        ).map((leave, index) => ({
+          ...leave,
+          id: leave.id || `legacy-${person.id}-${index}-${leave.date}`,
+        })),
+      };
+    })
+    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "ko"));
 }

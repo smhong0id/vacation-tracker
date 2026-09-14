@@ -1,10 +1,12 @@
-import { initializeApp } from "firebase/app";
-import { getDatabase, onValue, ref, remove, set, update } from "firebase/database";
+import { getApps, initializeApp } from "firebase/app";
+import { get, getDatabase, onValue, ref, remove, set, update } from "firebase/database";
+import { countDashboardTeams, hashPassword, normalizeUsername } from "./auth";
 import { firebaseConfig } from "./firebaseConfig";
 import { peopleFromRecord } from "./vacation";
-import { seedData } from "./seed";
 
 const LOCAL_KEY = "vacation-tracker-data";
+const ADMIN_USERNAME = "admin";
+const ADMIN_PASSWORD = "ghdtnals";
 
 export const isFirebaseEnabled = Boolean(
   firebaseConfig.apiKey && firebaseConfig.databaseURL && firebaseConfig.projectId,
@@ -12,17 +14,17 @@ export const isFirebaseEnabled = Boolean(
 
 let db = null;
 if (isFirebaseEnabled) {
-  const app = initializeApp(firebaseConfig);
-  db = getDatabase(app);
+  const app = getApps()[0] || initializeApp(firebaseConfig);
+  db = getDatabase(app, firebaseConfig.databaseURL);
 }
 
 function readLocal() {
   try {
     const raw = localStorage.getItem(LOCAL_KEY);
-    if (!raw) return structuredClone(seedData);
+    if (!raw) return { people: [] };
     return { people: peopleFromRecord(JSON.parse(raw).people) };
   } catch {
-    return structuredClone(seedData);
+    return { people: [] };
   }
 }
 
@@ -30,71 +32,197 @@ function writeLocal(people) {
   localStorage.setItem(LOCAL_KEY, JSON.stringify({ people }));
 }
 
-export function subscribe(onData) {
-  if (!isFirebaseEnabled) {
-    onData({ people: readLocal().people, mode: "local" });
-    const onStorage = (event) => {
-      if (event.key === LOCAL_KEY) {
-        onData({ people: readLocal().people, mode: "local" });
-      }
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }
-
-  const peopleRef = ref(db, "people");
-  const unsubscribe = onValue(peopleRef, async (snap) => {
-    if (!snap.exists()) {
-      const seed = {};
-      for (const person of seedData.people) {
-        seed[person.id] = toFirebasePerson(person);
-      }
-      await set(peopleRef, seed);
-      onData({ people: seedData.people, mode: "shared" });
-      return;
-    }
-    onData({ people: peopleFromRecord(snap.val()), mode: "shared" });
-  });
-  return unsubscribe;
-}
-
-function toFirebasePerson(person) {
-  const leaves = {};
+function personPayload(person) {
+  const currentLeaves = {};
   for (const leave of person.used_leaves || []) {
-    const id = leave.id || crypto.randomUUID();
-    leaves[id] = { ...leave, id };
+    currentLeaves[leave.id] = leave;
   }
   return {
     id: person.id,
     name: person.name,
+    username: person.username || "",
+    passwordHash: person.passwordHash || "",
+    team: person.team || "",
+    rank: person.rank || "member",
     hire_date: person.hire_date,
     duty_start: person.duty_start || null,
     duty_interval_days: person.duty_interval_days || 21,
-    used_leaves: leaves,
+    used_leaves: currentLeaves,
   };
 }
 
-export async function savePerson(person) {
+async function writeStats(people) {
+  const stats = countDashboardTeams(people);
+  if (!isFirebaseEnabled) {
+    const data = readLocal();
+    localStorage.setItem(
+      LOCAL_KEY,
+      JSON.stringify({ people: data.people, stats }),
+    );
+    return stats;
+  }
+  await set(ref(db, "stats"), stats);
+  return stats;
+}
+
+async function refreshStatsFromDb() {
+  if (!isFirebaseEnabled) {
+    return writeStats(readLocal().people);
+  }
+  const snap = await get(ref(db, "people"));
+  const people = snap.exists() ? peopleFromRecord(snap.val()) : [];
+  return writeStats(people);
+}
+
+export async function ensureAdminAccount() {
+  const passwordHash = await hashPassword(ADMIN_PASSWORD);
+  if (!isFirebaseEnabled) return;
+  const adminSnap = await get(ref(db, "admin"));
+  if (!adminSnap.exists()) {
+    await set(ref(db, "admin"), {
+      username: ADMIN_USERNAME,
+      passwordHash,
+    });
+  }
+  await set(ref(db, `usernames/${ADMIN_USERNAME}`), { type: "admin" });
+  await refreshStatsFromDb();
+}
+
+export function subscribeStats(onData) {
+  if (!isFirebaseEnabled) {
+    const people = readLocal().people;
+    onData({ stats: countDashboardTeams(people), mode: "local" });
+    return () => {};
+  }
+
+  let gotShared = false;
+  const timeout = setTimeout(() => {
+    if (gotShared) return;
+    onData({
+      stats: { ta: 0, dba: 0 },
+      mode: "local",
+      error:
+        "Realtime Database에 아직 연결되지 않았습니다. Firebase 콘솔에서 Realtime Database를 생성하고, 규칙을 읽기/쓰기 허용으로 열어 주세요.",
+    });
+  }, 8000);
+
+  const unsub = onValue(
+    ref(db, "stats"),
+    (snap) => {
+      gotShared = true;
+      clearTimeout(timeout);
+      const stats = snap.val() || { ta: 0, dba: 0 };
+      onData({ stats, mode: "shared" });
+    },
+    (error) => {
+      clearTimeout(timeout);
+      if (gotShared) return;
+      onData({ stats: { ta: 0, dba: 0 }, mode: "local", error: error.message });
+    },
+  );
+
+  return () => {
+    clearTimeout(timeout);
+    unsub();
+  };
+}
+
+export function subscribePeople(onData) {
+  if (!isFirebaseEnabled) {
+    onData({ people: readLocal().people, mode: "local" });
+    return () => {};
+  }
+  const apply = (snap) => {
+    onData({
+      people: snap.exists() ? peopleFromRecord(snap.val()) : [],
+      mode: "shared",
+    });
+  };
+  get(ref(db, "people")).then(apply).catch(() => {});
+  return onValue(ref(db, "people"), apply);
+}
+
+export function subscribePerson(personId, onData) {
+  if (!isFirebaseEnabled) {
+    const person = readLocal().people.find((p) => p.id === personId) || null;
+    onData({ person, mode: "local" });
+    return () => {};
+  }
+  return onValue(ref(db, `people/${personId}`), (snap) => {
+    const raw = snap.val();
+    onData({
+      person: raw ? peopleFromRecord({ [raw.id]: raw })[0] : null,
+      mode: "shared",
+    });
+  });
+}
+
+export async function login(username, password) {
+  const id = normalizeUsername(username);
+  const passwordHash = await hashPassword(password);
+  if (!id) throw new Error("아이디를 입력하세요.");
+
+  if (!isFirebaseEnabled) {
+    if (id === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+      return { type: "admin", username: ADMIN_USERNAME };
+    }
+    const person = readLocal().people.find((p) => normalizeUsername(p.username) === id);
+    if (!person || !person.passwordHash || person.passwordHash !== passwordHash) {
+      throw new Error("아이디 또는 비밀번호가 올바르지 않습니다.");
+    }
+    return { type: "employee", username: person.username, personId: person.id };
+  }
+
+  const userSnap = await get(ref(db, `usernames/${id}`));
+  if (!userSnap.exists()) {
+    throw new Error("아이디 또는 비밀번호가 올바르지 않습니다.");
+  }
+  const rec = userSnap.val();
+  if (rec.type === "admin") {
+    const adminSnap = await get(ref(db, "admin"));
+    const admin = adminSnap.val() || {};
+    if (admin.passwordHash !== passwordHash) {
+      throw new Error("아이디 또는 비밀번호가 올바르지 않습니다.");
+    }
+    return { type: "admin", username: ADMIN_USERNAME };
+  }
+
+  const personSnap = await get(ref(db, `people/${rec.personId}`));
+  const person = personSnap.val();
+  if (!person || person.passwordHash !== passwordHash) {
+    throw new Error("아이디 또는 비밀번호가 올바르지 않습니다.");
+  }
+  return { type: "employee", username: person.username, personId: person.id };
+}
+
+async function updateUsernameIndex(person, previousUsername) {
+  const next = normalizeUsername(person.username);
+  const prev = normalizeUsername(previousUsername);
+  if (!isFirebaseEnabled) return;
+  if (prev && prev !== next) {
+    await remove(ref(db, `usernames/${prev}`));
+  }
+  if (next) {
+    if (next === ADMIN_USERNAME) {
+      throw new Error("admin 아이디는 사용할 수 없습니다.");
+    }
+    await set(ref(db, `usernames/${next}`), { type: "person", personId: person.id });
+  }
+}
+
+export async function savePerson(person, previousUsername = "") {
   if (!isFirebaseEnabled) {
     const data = readLocal();
     const idx = data.people.findIndex((p) => p.id === person.id);
     if (idx >= 0) data.people[idx] = person;
     else data.people.push(person);
     writeLocal(data.people);
+    await writeStats(data.people);
     return;
   }
-  const currentLeaves = {};
-  for (const leave of person.used_leaves || []) {
-    currentLeaves[leave.id] = leave;
-  }
-  await set(ref(db, `people/${person.id}`), {
-    id: person.id,
-    name: person.name,
-    hire_date: person.hire_date,
-    duty_start: person.duty_start || null,
-    duty_interval_days: person.duty_interval_days || 21,
-    used_leaves: currentLeaves,
-  });
+  await set(ref(db, `people/${person.id}`), personPayload(person));
+  await updateUsernameIndex(person, previousUsername);
+  await refreshStatsFromDb();
 }
 
 export async function patchPerson(personId, fields) {
@@ -102,20 +230,44 @@ export async function patchPerson(personId, fields) {
     const data = readLocal();
     const idx = data.people.findIndex((p) => p.id === personId);
     if (idx < 0) return;
+    const previousUsername = data.people[idx].username;
     data.people[idx] = { ...data.people[idx], ...fields };
     writeLocal(data.people);
+    if ("username" in fields) {
+      await updateUsernameIndex(data.people[idx], previousUsername);
+    }
+    await writeStats(data.people);
     return;
   }
+  const currentSnap = await get(ref(db, `people/${personId}`));
+  const current = currentSnap.val() || {};
   await update(ref(db, `people/${personId}`), fields);
+  if ("username" in fields) {
+    await updateUsernameIndex({ ...current, ...fields, id: personId }, current.username);
+  }
+  await refreshStatsFromDb();
+}
+
+export async function setPersonPassword(personId, password) {
+  const passwordHash = await hashPassword(password);
+  await patchPerson(personId, { passwordHash });
 }
 
 export async function deletePerson(personId) {
   if (!isFirebaseEnabled) {
     const data = readLocal();
-    writeLocal(data.people.filter((p) => p.id !== personId));
+    const remaining = data.people.filter((p) => p.id !== personId);
+    writeLocal(remaining);
+    await writeStats(remaining);
     return;
   }
+  const currentSnap = await get(ref(db, `people/${personId}`));
+  const current = currentSnap.val();
+  if (current?.username) {
+    await remove(ref(db, `usernames/${normalizeUsername(current.username)}`));
+  }
   await remove(ref(db, `people/${personId}`));
+  await refreshStatsFromDb();
 }
 
 export async function addLeave(personId, leave) {
@@ -140,4 +292,19 @@ export async function removeLeave(personId, leaveId) {
     return;
   }
   await remove(ref(db, `people/${personId}/used_leaves/${leaveId}`));
+}
+
+export async function usernameTaken(username, exceptPersonId = "") {
+  const id = normalizeUsername(username);
+  if (!id) return false;
+  if (id === ADMIN_USERNAME) return true;
+  if (!isFirebaseEnabled) {
+    return readLocal().people.some(
+      (p) => normalizeUsername(p.username) === id && p.id !== exceptPersonId,
+    );
+  }
+  const snap = await get(ref(db, `usernames/${id}`));
+  if (!snap.exists()) return false;
+  const rec = snap.val();
+  return rec.type === "admin" || rec.personId !== exceptPersonId;
 }
