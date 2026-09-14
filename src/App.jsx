@@ -26,6 +26,9 @@ import {
 import {
   dutyWeekFromDate,
   formatDutyWeek,
+  formatLeaveType,
+  LEAVE_FULL,
+  LEAVE_HALF,
   localToday,
   newDutyWeek,
   newLeave,
@@ -58,6 +61,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState("");
   const [showLogin, setShowLogin] = useState(false);
   const [showSignup, setShowSignup] = useState(false);
+  const [signupDraft, setSignupDraft] = useState(null);
   const [sheet, setSheet] = useState(null);
   const [passwordTarget, setPasswordTarget] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -140,6 +144,7 @@ export default function App() {
         personId: personData.id,
       });
       setShowSignup(false);
+      setSignupDraft(null);
     } finally {
       setBusy(false);
     }
@@ -277,11 +282,6 @@ export default function App() {
           <div className={`badge ${mode === "shared" ? "shared" : ""}`}>
             {mode === "shared" ? "공유 저장 중" : "이 브라우저만"}
           </div>
-          {session ? (
-            <button className="linkish" onClick={() => persistSession(null)}>
-              로그아웃
-            </button>
-          ) : null}
         </div>
       </header>
 
@@ -335,7 +335,11 @@ export default function App() {
           today={today}
           requireAccount
           requirePassword
-          onClose={() => setShowSignup(false)}
+          initial={signupDraft}
+          onClose={(draft) => {
+            setSignupDraft(draft || null);
+            setShowSignup(false);
+          }}
           onSubmit={onSignup}
         />
       )}
@@ -521,7 +525,8 @@ function PersonView({
             <div className="row" key={item.id}>
               <div>
                 <div>{item.date}</div>
-                <div className="muted">{item.type}</div>
+                <div className="muted">{formatLeaveType(item.type)}</div>
+                {item.reason ? <div className="leave-reason">{item.reason}</div> : null}
               </div>
               <button className="tiny" onClick={() => onRemoveLeave(item.id)}>
                 삭제
@@ -557,7 +562,7 @@ function PersonView({
         <h2>계산 기준</h2>
         <ul className="criteria">
           <li>입사일: {selected.hire_date}</li>
-          <li>월 1개 연차 발생 · 현재 {formatDay(summary.earnedAnnual)}일</li>
+          <li>입사일 기준 월 1일 발생 · 현재 {formatDay(summary.earnedAnnual)}일</li>
           <li>당직 1주 = 휴가 1일 · 현재 {formatDay(summary.earnedDuty)}일</li>
         </ul>
       </section>
@@ -644,14 +649,15 @@ function LoginSheet({ onClose, onSubmit }) {
 
 function LeaveSheet({ today, busy, onClose, onSubmit }) {
   const [date, setDate] = useState(today);
-  const [type, setType] = useState("연차(1일)");
+  const [type, setType] = useState(LEAVE_FULL);
+  const [reason, setReason] = useState("");
   const [error, setError] = useState("");
 
   async function submit(event) {
     event.preventDefault();
     setError("");
     try {
-      await onSubmit({ date, type });
+      await onSubmit({ date, type, reason });
     } catch (err) {
       setError(err.message || "저장에 실패했습니다.");
     }
@@ -668,9 +674,18 @@ function LeaveSheet({ today, busy, onClose, onSubmit }) {
         <label className="field">
           <span>종류</span>
           <select value={type} onChange={(e) => setType(e.target.value)}>
-            <option>연차(1일)</option>
-            <option>반차(0.5일)</option>
+            <option value={LEAVE_FULL}>하루 휴가 (1일)</option>
+            <option value={LEAVE_HALF}>반일 휴가 (0.5일)</option>
           </select>
+        </label>
+        <label className="field">
+          <span>사유</span>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            maxLength={80}
+            placeholder="한 줄로 적어 주세요"
+          />
         </label>
         {error && <p className="warning">{error}</p>}
         <div className="actions">
@@ -739,11 +754,26 @@ function PersonSheet({
 }) {
   const [name, setName] = useState(initial?.name || "");
   const [username, setUsername] = useState(initial?.username || "");
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(initial?.password || "");
   const [team, setTeam] = useState(initial?.team || "ta");
   const [rank, setRank] = useState(initial?.rank || "member");
   const [hireDate, setHireDate] = useState(initial?.hire_date || today);
   const [error, setError] = useState("");
+
+  function draft() {
+    return {
+      name,
+      username,
+      password,
+      team,
+      rank,
+      hire_date: hireDate,
+    };
+  }
+
+  function close() {
+    onClose(draft());
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -767,7 +797,7 @@ function PersonSheet({
   }
 
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay" onClick={close}>
       <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h3>{title}</h3>
         <label className="field">
@@ -823,7 +853,7 @@ function PersonSheet({
         </label>
         {error && <p className="warning">{error}</p>}
         <div className="actions">
-          <button type="button" className="ghost" onClick={onClose}>
+          <button type="button" className="ghost" onClick={close}>
             취소
           </button>
           <button type="submit" className="primary" disabled={busy}>

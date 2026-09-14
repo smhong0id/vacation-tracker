@@ -120,13 +120,28 @@ export function newPerson({
   };
 }
 
-export function newLeave({ date, type }) {
-  const amount = type === "반차(0.5일)" ? 0.5 : 1;
+export const LEAVE_FULL = "하루 휴가";
+export const LEAVE_HALF = "반일 휴가";
+
+export function isHalfLeave(type) {
+  return type === LEAVE_HALF || type === "반차(0.5일)" || type === "반차";
+}
+
+export function formatLeaveType(type) {
+  if (isHalfLeave(type)) return LEAVE_HALF;
+  if (type === "연차(1일)" || type === "연차" || !type) return LEAVE_FULL;
+  return type;
+}
+
+export function newLeave({ date, type, reason }) {
+  const label = formatLeaveType(type);
+  const note = String(reason || "").trim();
   return {
     id: crypto.randomUUID(),
     date,
-    amount,
-    type,
+    amount: isHalfLeave(type) ? 0.5 : 1,
+    type: label,
+    reason: note,
   };
 }
 

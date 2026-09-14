@@ -242,6 +242,12 @@ button {
 }
 
 .row:last-child { border-bottom: 0; }
+.row > div:first-child { min-width: 0; }
+.leave-reason {
+  margin-top: 2px;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
 
 .ghost, .primary, .secondary, .danger, .tiny {
   border-radius: 12px;
