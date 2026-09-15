@@ -4,6 +4,7 @@ import {
   normalizeUsername,
   personRoleLabel,
   RANKS,
+  teamLabel,
   TEAMS,
 } from "./auth";
 import {
@@ -82,6 +83,7 @@ export default function App() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [adminView, setAdminView] = useState("dashboard");
+  const [employeeView, setEmployeeView] = useState("home");
 
   const isAdmin = session?.type === "admin";
   const isEmployee = session?.type === "employee";
@@ -89,6 +91,11 @@ export default function App() {
   const selected = isEmployee
     ? person
     : people.find((p) => p.id === viewingId) || null;
+  const isPl = Boolean(isEmployee && selected?.rank === "pl" && selected?.team);
+  const teamPeople = isPl
+    ? people.filter((p) => p.team === selected.team && p.rank !== "pm")
+    : [];
+  const showTeamBoard = isPl && employeeView === "team";
 
   useEffect(() => {
     ensureAdminAccount().catch(() => {});
@@ -141,6 +148,7 @@ export default function App() {
     else sessionStorage.removeItem(SESSION_KEY);
     setSelectedId("");
     setAdminView("dashboard");
+    setEmployeeView("home");
     setConfirmDelete(false);
     setLeaveEditTarget(null);
     setSheet(null);
@@ -339,7 +347,7 @@ export default function App() {
     }
   }
 
-  const showPerson = Boolean(selected && (isAdmin || isEmployee));
+  const showPerson = Boolean(selected && (isAdmin || isEmployee) && !showTeamBoard);
   const showAdminDashboard = isAdmin && !selectedId && adminView === "dashboard";
   const showAdminPeople = isAdmin && !selectedId && adminView === "people";
 
@@ -349,22 +357,27 @@ export default function App() {
         <div>
           <h1>휴가 관리기</h1>
           <p>
-            {selected
-              ? `${selected.name}의 휴가 기록`
-              : isAdmin
-                ? showAdminPeople
-                  ? "직원 관리"
-                  : "전체 휴가 현황"
-                : "팀 인원 현황"}
+            {showTeamBoard
+              ? `${teamLabel(selected.team)} 현황`
+              : selected
+                ? `${selected.name}의 휴가 기록`
+                : isAdmin
+                  ? showAdminPeople
+                    ? "직원 관리"
+                    : "전체 휴가 현황"
+                  : "팀 인원 현황"}
           </p>
         </div>
         <div className="top-actions">
           <div className={`badge ${mode === "shared" ? "shared" : ""}`}>
             {mode === "shared" ? "공유 저장 중" : "이 브라우저만"}
           </div>
-          {isAdmin ? (
-            <button className="linkish" onClick={() => persistSession(null)}>
-              로그아웃
+          {isAdmin || showTeamBoard ? (
+            <button
+              className="linkish"
+              onClick={() => (showTeamBoard ? setEmployeeView("home") : persistSession(null))}
+            >
+              {showTeamBoard ? "내 휴가로" : "로그아웃"}
             </button>
           ) : null}
         </div>
@@ -376,6 +389,13 @@ export default function App() {
         <div className="empty">불러오는 중…</div>
       ) : isEmployee && !selected ? (
         <div className="empty">불러오는 중…</div>
+      ) : showTeamBoard ? (
+        <TeamDashboard
+          team={selected.team}
+          people={teamPeople}
+          today={today}
+          onBack={() => setEmployeeView("home")}
+        />
       ) : showPerson ? (
         <PersonView
           selected={selected}
@@ -387,10 +407,12 @@ export default function App() {
           roster={roster}
           today={today}
           isAdmin={isAdmin}
+          isPl={isPl}
           confirmDelete={confirmDelete}
           busy={busy}
           onBack={isAdmin ? () => setSelectedId("") : () => persistSession(null)}
           adminBackLabel={adminView === "people" ? "← 직원 목록" : "← 대시보드"}
+          onOpenTeamBoard={() => setEmployeeView("team")}
           onAddLeave={() => setSheet("leave")}
           onAddCustomLeave={() => setSheet("bonus-leave")}
           onAddDutyWeek={() => setSheet("duty")}
@@ -624,7 +646,31 @@ function shiftMonth(year, month, delta) {
   return { year: y, month: m };
 }
 
-function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
+function PersonName({ id, name, onOpen }) {
+  if (!onOpen) return <strong>{name}</strong>;
+  return (
+    <button type="button" className="name-link" onClick={() => onOpen(id)}>
+      {name}
+    </button>
+  );
+}
+
+function TeamDashboard({ team, people, today, onBack }) {
+  return (
+    <>
+      <button className="back" onClick={onBack}>
+        ← 내 휴가
+      </button>
+      <AdminDashboard
+        people={people}
+        today={today}
+        heading={`${teamLabel(team)} 현황판`}
+      />
+    </>
+  );
+}
+
+function AdminDashboard({ people, today, heading, onManagePeople, onOpenPerson }) {
   const [y, m] = today.split("-").map(Number);
   const [ym, setYm] = useState({ year: y, month: m });
   const [selectedDate, setSelectedDate] = useState(today);
@@ -633,6 +679,15 @@ function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
 
   return (
     <>
+      {heading ? (
+        <section className="card">
+          <h2 style={{ marginBottom: 0 }}>{heading}</h2>
+          <p className="muted" style={{ marginBottom: 0, marginTop: 6 }}>
+            소속 팀원 {people.length}명의 휴가·권한 현황입니다.
+          </p>
+        </section>
+      ) : null}
+
       <section className="card">
         <div className="card-head">
           <h2>휴가 달력</h2>
@@ -695,9 +750,7 @@ function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
           leaveIndex[selectedDate].map((item) => (
             <div className="row" key={`${item.personId}-${item.type}-${item.reason}`}>
               <div>
-                <button type="button" className="name-link" onClick={() => onOpenPerson(item.personId)}>
-                  {item.name}
-                </button>
+                <PersonName id={item.personId} name={item.name} onOpen={onOpenPerson} />
                 <div className="muted">
                   {formatLeaveType(item.type)} · {formatDay(item.amount)}일
                   {item.reason ? ` · ${item.reason}` : ""}
@@ -731,9 +784,7 @@ function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
                   return (
                     <tr key={p.id} className={hasUrgent ? "has-urgent" : ""}>
                       <td>
-                        <button type="button" className="name-link" onClick={() => onOpenPerson(p.id)}>
-                          {p.name}
-                        </button>
+                        <PersonName id={p.id} name={p.name} onOpen={onOpenPerson} />
                       </td>
                       {ends.map(({ service, end }) => (
                         <td key={service}>
@@ -771,9 +822,7 @@ function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
                   return (
                     <tr key={p.id}>
                       <td>
-                        <button type="button" className="name-link" onClick={() => onOpenPerson(p.id)}>
-                          {p.name}
-                        </button>
+                        <PersonName id={p.id} name={p.name} onOpen={onOpenPerson} />
                       </td>
                       <td className="muted">{personRoleLabel(p)}</td>
                       <td>
@@ -790,9 +839,11 @@ function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
         )}
       </section>
 
-      <button className="primary" onClick={onManagePeople}>
-        직원 관리
-      </button>
+      {onManagePeople ? (
+        <button className="primary" onClick={onManagePeople}>
+          직원 관리
+        </button>
+      ) : null}
     </>
   );
 }
@@ -848,10 +899,12 @@ function PersonView({
   roster,
   today,
   isAdmin,
+  isPl,
   adminBackLabel,
   confirmDelete,
   busy,
   onBack,
+  onOpenTeamBoard,
   onAddLeave,
   onAddCustomLeave,
   onAddDutyWeek,
@@ -871,6 +924,12 @@ function PersonView({
       <button className="back" onClick={onBack}>
         {isAdmin ? adminBackLabel : "← 로그아웃"}
       </button>
+
+      {isPl ? (
+        <button className="secondary" style={{ marginBottom: 14 }} onClick={onOpenTeamBoard}>
+          팀 현황판
+        </button>
+      ) : null}
 
       {!isAdmin && roster ? (
         <section className="card today-board">
