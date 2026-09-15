@@ -54,6 +54,36 @@ export function formatDutyWeek(week) {
   return `${week.start} ~ ${week.end}`;
 }
 
+export function isOnDutyWeek(week, dateIso) {
+  return Boolean(week?.start && week?.end && week.start <= dateIso && dateIso <= week.end);
+}
+
+export function personOnDutyOnDate(person, dateIso) {
+  return (person?.duty_weeks || []).some((week) => isOnDutyWeek(week, dateIso));
+}
+
+export function todayBoard(people, dateIso = localToday()) {
+  const onLeave = [];
+  const onDuty = [];
+  for (const person of people || []) {
+    const dayLeaves = (person.used_leaves || []).filter((item) => item.date === dateIso);
+    if (dayLeaves.length) {
+      const amount = dayLeaves.reduce((sum, leave) => sum + Number(leave.amount || 0), 0);
+      onLeave.push({
+        id: person.id,
+        name: person.name,
+        amount,
+      });
+    }
+    if (personOnDutyOnDate(person, dateIso)) {
+      onDuty.push({ id: person.id, name: person.name });
+    }
+  }
+  onLeave.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  onDuty.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  return { onLeave, onDuty };
+}
+
 export function monthlyLeaveCount(todayIso, hireIso) {
   if (!hireIso) return 0;
   const hire = parseIso(hireIso);
@@ -135,6 +165,31 @@ export const ACCESS_SERVICES = {
   SCOP: "SCOP",
   SBC: "SBC",
 };
+
+export const ACCESS_WARNING_DAYS = 14;
+
+export function daysBetween(fromIso, toIso) {
+  if (!fromIso || !toIso) return null;
+  const a = parseIso(fromIso);
+  const b = parseIso(toIso);
+  const da = new Date(a.y, a.m - 1, a.d);
+  const db = new Date(b.y, b.m - 1, b.d);
+  return Math.round((db - da) / 86400000);
+}
+
+export function latestAccessEnd(person, service) {
+  const svc = String(service || "").toUpperCase();
+  const grants = (person?.access_grants || []).filter(
+    (grant) => String(grant.service || "").toUpperCase() === svc && grant.end,
+  );
+  if (!grants.length) return "";
+  return grants.reduce((latest, grant) => (grant.end > latest ? grant.end : latest), "");
+}
+
+export function isAccessUrgent(endIso, todayIso = localToday(), warningDays = ACCESS_WARNING_DAYS) {
+  if (!endIso) return false;
+  return todayIso >= addDays(endIso, -warningDays);
+}
 
 export function isHalfLeave(type) {
   const text = String(type || "");

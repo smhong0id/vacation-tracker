@@ -30,9 +30,12 @@ import {
 } from "./storage";
 import {
   ACCESS_SERVICES,
+  daysBetween,
   dutyWeekFromDate,
   formatDutyWeek,
   formatLeaveType,
+  isAccessUrgent,
+  latestAccessEnd,
   LEAVE_FULL,
   LEAVE_HALF,
   localToday,
@@ -44,6 +47,7 @@ import {
   newPerson,
   patchLeaveFields,
   personSummary,
+  todayBoard,
 } from "./vacation";
 
 const SESSION_KEY = "vacation-tracker-session";
@@ -97,12 +101,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) {
+    if (!isAdmin && !isEmployee) {
       setPeople([]);
       return undefined;
     }
     return subscribePeople(({ people: next }) => setPeople(next));
-  }, [isAdmin]);
+  }, [isAdmin, isEmployee]);
 
   useEffect(() => {
     if (!isEmployee || !session.personId) {
@@ -113,6 +117,7 @@ export default function App() {
   }, [isEmployee, session?.personId]);
 
   const today = localToday();
+  const roster = isEmployee ? todayBoard(people, today) : null;
   const summary = selected ? personSummary(selected, today) : null;
   const leaves = selected
     ? [...(selected.used_leaves || [])].sort((a, b) => (a.date < b.date ? 1 : -1))
@@ -379,6 +384,8 @@ export default function App() {
           dutyWeeks={dutyWeeks}
           bonusLeaves={bonusLeaves}
           accessGrants={accessGrants}
+          roster={roster}
+          today={today}
           isAdmin={isAdmin}
           confirmDelete={confirmDelete}
           busy={busy}
@@ -575,6 +582,34 @@ function calendarCells(year, month) {
   return cells;
 }
 
+function accessEndMeta(end, today) {
+  if (!end) return { label: "—", hint: "", urgent: false, expired: false };
+  const days = daysBetween(today, end);
+  const urgent = isAccessUrgent(end, today);
+  if (days < 0) return { label: end, hint: "만료됨", urgent: true, expired: true };
+  if (days === 0) return { label: end, hint: "오늘 만료", urgent: true, expired: false };
+  if (urgent) return { label: end, hint: `D-${days}`, urgent: true, expired: false };
+  return { label: end, hint: "", urgent: false, expired: false };
+}
+
+function personAccessEnds(person) {
+  return Object.keys(ACCESS_SERVICES).map((service) => ({
+    service,
+    end: latestAccessEnd(person, service),
+  }));
+}
+
+function AccessDateCell({ end, today }) {
+  const meta = accessEndMeta(end, today);
+  if (!end) return <span className="access-empty">—</span>;
+  return (
+    <span className={`access-date${meta.urgent ? " urgent" : ""}`}>
+      {meta.label}
+      {meta.hint ? <small>{meta.hint}</small> : null}
+    </span>
+  );
+}
+
 function shiftMonth(year, month, delta) {
   let m = month + delta;
   let y = year;
@@ -674,6 +709,47 @@ function AdminDashboard({ people, today, onManagePeople, onOpenPerson }) {
       </section>
 
       <section className="card">
+        <h2>직원별 권한 만료일</h2>
+        <p className="muted">RBS / SCOP / SBC 만료일입니다. 2주 전부터 빨간색으로 표시됩니다.</p>
+        {people.length === 0 ? (
+          <p className="muted">등록된 직원이 없습니다.</p>
+        ) : (
+          <div className="stats-table-wrap">
+            <table className="stats-table">
+              <thead>
+                <tr>
+                  <th>이름</th>
+                  {Object.keys(ACCESS_SERVICES).map((service) => (
+                    <th key={service}>{service}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {people.map((p) => {
+                  const ends = personAccessEnds(p);
+                  const hasUrgent = ends.some(({ end }) => isAccessUrgent(end, today));
+                  return (
+                    <tr key={p.id} className={hasUrgent ? "has-urgent" : ""}>
+                      <td>
+                        <button type="button" className="name-link" onClick={() => onOpenPerson(p.id)}>
+                          {p.name}
+                        </button>
+                      </td>
+                      {ends.map(({ service, end }) => (
+                        <td key={service}>
+                          <AccessDateCell end={end} today={today} />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card">
         <h2>직원별 휴가 현황</h2>
         {people.length === 0 ? (
           <p className="muted">등록된 직원이 없습니다.</p>
@@ -769,6 +845,8 @@ function PersonView({
   dutyWeeks,
   bonusLeaves,
   accessGrants,
+  roster,
+  today,
   isAdmin,
   adminBackLabel,
   confirmDelete,
@@ -793,6 +871,44 @@ function PersonView({
       <button className="back" onClick={onBack}>
         {isAdmin ? adminBackLabel : "← 로그아웃"}
       </button>
+
+      {!isAdmin && roster ? (
+        <section className="card today-board">
+          <h2>오늘 · {today}</h2>
+          <div className="today-board-grid">
+            <div className="today-board-block">
+              <span>휴가자</span>
+              {roster.onLeave.length === 0 ? (
+                <p className="muted">없음</p>
+              ) : (
+                <ul>
+                  {roster.onLeave.map((item) => (
+                    <li key={item.id}>
+                      <strong>
+                        {item.name} ({item.amount}일)
+                      </strong>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="today-board-block">
+              <span>당직자</span>
+              {roster.onDuty.length === 0 ? (
+                <p className="muted">없음</p>
+              ) : (
+                <ul>
+                  {roster.onDuty.map((item) => (
+                    <li key={item.id}>
+                      <strong>{item.name}</strong>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="card">
         <h2>
@@ -916,7 +1032,9 @@ function PersonView({
             <div className="row" key={grant.id}>
               <div>
                 <div className="access-service">{grant.service}</div>
-                <div className="muted">만료일 {grant.end}</div>
+                <div className="muted">
+                  만료일 <AccessDateCell end={grant.end} today={localToday()} />
+                </div>
               </div>
               {!isAdmin ? (
                 <button className="tiny" onClick={() => onRemoveAccessGrant(grant.id)}>
