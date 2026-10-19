@@ -292,19 +292,21 @@ function listFromRecord(raw) {
   return Array.isArray(raw) ? raw : Object.values(raw);
 }
 
-export function peopleFromRecord(raw) {
+export function peopleFromRecord(raw, { keepSecret = false } = {}) {
   if (!raw) return [];
   const list = Array.isArray(raw) ? raw : Object.values(raw);
   return list
     .filter(Boolean)
     .map((person) => {
-      const legacyTeam = person.team;
+      const safePerson = { ...person };
+      if (!keepSecret) delete safePerson.passwordHash;
+      const legacyTeam = safePerson.team;
       const team = legacyTeam === "ta" || legacyTeam === "dba" ? legacyTeam : "";
       const rank =
-        person.rank ||
+        safePerson.rank ||
         (legacyTeam === "pl" ? "pl" : legacyTeam === "pm" ? "pm" : "member");
       return {
-        ...person,
+        ...safePerson,
         team,
         rank,
         duty_weeks: listFromRecord(person.duty_weeks).map((week, index) => {

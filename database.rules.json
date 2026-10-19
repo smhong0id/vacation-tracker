@@ -1,0 +1,88 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "stats": {
+      ".read": true,
+      ".write": "auth != null && root.child('accounts').child(auth.uid).exists()",
+      "ta": {
+        ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000"
+      },
+      "dba": {
+        ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000"
+      },
+      "$other": {
+        ".validate": false
+      }
+    },
+    "usernames": {
+      "$key": {
+        ".read": true,
+        ".write": "auth != null && ($key !== 'admin' || root.child('accounts').child(auth.uid).child('role').val() === 'admin' || auth.token.email === 'admin@users.company-vacation.app') && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || (!data.exists() && newData.child('uid').val() === auth.uid) || (data.child('uid').val() === auth.uid && !newData.exists()))",
+        ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'email']) && newData.child('uid').isString() && newData.child('email').isString() && (newData.child('uid').val() === auth.uid || root.child('accounts').child(auth.uid).child('role').val() === 'admin'))"
+      }
+    },
+    "accounts": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || root.child('accounts').child(auth.uid).child('role').val() === 'admin')",
+        ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || (auth.uid === $uid && !data.exists()))",
+        ".validate": "!newData.exists() || (newData.child('role').val() === 'employee' && newData.child('username').isString() && newData.child('personId').isString() && root.child('people').child(newData.child('personId').val()).child('uid').val() === $uid) || (newData.child('role').val() === 'admin' && auth.uid === $uid && auth.token.email === 'admin@users.company-vacation.app')",
+        "username": {
+          ".write": "auth != null && (auth.uid === $uid || root.child('accounts').child(auth.uid).child('role').val() === 'admin')"
+        }
+      }
+    },
+    "people": {
+      ".read": "auth != null && root.child('accounts').child(auth.uid).exists()",
+      "$personId": {
+        ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || (!data.exists() && newData.child('uid').val() === auth.uid && newData.child('id').val() === $personId && newData.child('name').isString() && newData.child('username').isString() && !newData.hasChild('passwordHash')))",
+        "name": {
+          ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+        },
+        "username": {
+          ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+        },
+        "team": {
+          ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+        },
+        "rank": {
+          ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+        },
+        "hire_date": {
+          ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+        },
+        "uid": {
+          ".write": "auth != null && root.child('accounts').child(auth.uid).child('role').val() === 'admin'"
+        },
+        "passwordHash": {
+          ".write": "auth != null && root.child('accounts').child(auth.uid).child('role').val() === 'admin' && !newData.exists()",
+          ".validate": "!newData.exists()"
+        },
+        "used_leaves": {
+          "$leaveId": {
+            ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+          }
+        },
+        "duty_weeks": {
+          "$weekId": {
+            ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+          }
+        },
+        "bonus_leaves": {
+          "$bonusId": {
+            ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+          }
+        },
+        "access_grants": {
+          "$grantId": {
+            ".write": "auth != null && (root.child('accounts').child(auth.uid).child('role').val() === 'admin' || root.child('accounts').child(auth.uid).child('personId').val() === $personId)"
+          }
+        }
+      }
+    },
+    "admin": {
+      ".read": false,
+      ".write": "auth != null && auth.token.email === 'admin@users.company-vacation.app' && !newData.exists()"
+    }
+  }
+}

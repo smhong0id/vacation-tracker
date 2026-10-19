@@ -16,7 +16,7 @@ GitHub Pages는 정적 파일만 호스팅합니다. 브라우저 LocalStorage�
 
 그래서 노트북에서 넣은 휴가가 휴대폰이나 다른 사람 화면에는 보이지 않습니다.
 
-다른 사람도 같은 기록을 보고 고치려면 공유 저장소가 필요합니다. 이 프로젝트는 **Firebase Realtime Database** 를 씁니다. 무료 한도 안에서 충분하고, 로그인 없이 URL만 알면 읽고 수정할 수 있습니다.
+다른 사람도 같은 기록을 보고 고치려면 공유 저장소가 필요합니다. 이 프로젝트는 **Firebase Realtime Database** 와 **Firebase Authentication** 을 씁니다. 로그인하지 않은 사람은 팀 인원 수만 볼 수 있고, 휴가 기록은 로그인한 계정만 읽고 수정할 수 있습니다.
 
 Firebase 설정을 넣기 전에는 이 브라우저에만 저장되는 미리보기 모드로 동작합니다.
 
@@ -58,20 +58,11 @@ http://localhost:5173
 1. [Firebase 콘솔](https://console.firebase.google.com/)에서 프로젝트 추가
 2. **Build → Realtime Database → Create Database**
    - 위치는 가까운 곳이면 됩니다
-   - 시작은 **테스트 모드** 로 해도 됩니다
-3. 규칙이 아래와 같은지 확인합니다. URL을 아는 사람은 누구나 읽고 쓸 수 있습니다.
-
-```json
-{
-  "rules": {
-    ".read": true,
-    ".write": true
-  }
-}
-```
-
-4. 프로젝트 설정(톱니바퀴) → **내 앱** → 웹 앱(`</>`) 추가
-5. 나온 설정값을 `src/firebaseConfig.js` 에 붙여 넣습니다.
+3. **Build → Authentication → Sign-in method** 에서 **이메일/비밀번호** 를 켭니다. 앱이 아이디를 내부 이메일로 바꿔 로그인하므로, 비밀번호 재설정 메일은 쓰지 않습니다.
+4. 이 저장소의 새 화면을 먼저 배포하거나 로컬에서 한 번 연 뒤, 관리자와 기존 직원이 **한 번씩 로그인** 합니다. 그때 기존 비밀번호가 Firebase 로그인으로 옮겨집니다.
+5. 그 다음 Realtime Database **규칙** 에 `database.rules.json` 내용을 붙여 넣고 게시합니다. 규칙을 먼저 닫으면, 아직 옮기지 못한 직원은 관리자가 비밀번호를 다시 설정해야 합니다.
+6. 프로젝트 설정(톱니바퀴) → **내 앱** → 웹 앱(`</>`) 추가
+7. 나온 설정값을 `src/firebaseConfig.js` 에 붙여 넣습니다.
 
 ```js
 export const firebaseConfig = {
@@ -87,7 +78,7 @@ export const firebaseConfig = {
 
 `databaseURL` 이 비어 있으면 공유가 되지 않습니다. Realtime Database를 만든 뒤 콘솔에 나오는 URL을 넣으세요.
 
-6. 다시 실행해서 화면 오른쪽 위가 **공유 저장 중** 인지 확인합니다.
+8. 다시 실행해서 화면 오른쪽 위가 **공유 저장 중** 인지 확인합니다.
 
 ```powershell
 npm run dev
@@ -95,7 +86,7 @@ npm run dev
 
 사람·휴가 기록은 앱 코드가 아니라 Realtime Database에 저장됩니다. 화면 오른쪽 위가 **공유 저장 중** 이면 연결된 것입니다.
 
-주소만 알면 누구나 수정할 수 있으니, 팀 내부 주소로만 공유하세요.
+로그인한 사람만 휴가 기록을 수정할 수 있습니다. 관리자 비밀번호는 앱 소스에 들어 있으므로, 규칙을 적용한 뒤 Firebase 콘솔의 Authentication에서 `admin@users.company-vacation.app` 비밀번호를 바꾸면 소스에 적힌 값으로는 더 이상 로그인할 수 없습니다.
 
 ## GitHub Pages에 올리기
 
@@ -137,7 +128,8 @@ https://계정이름.github.io/vacation-tracker/
 **계정 만들기**
 
 - 이름, 아이디, 비밀번호, 팀(TA/DBA), 직급(팀원/PL/PM), 입사일을 넣고 가입합니다.
-- 가입 뒤에는 자기 휴가 등록/삭제와 비밀번호 변경만 할 수 있습니다.
+- 비밀번호는 6자 이상입니다.
+- 가입 뒤에는 자기 휴가 등록/삭제, 정보 수정, 비밀번호 변경을 할 수 있습니다. 다른 사람 기록은 볼 수만 있습니다.
 
 **로그인**
 

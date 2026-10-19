@@ -13,10 +13,14 @@ import {
   addDutyWeek,
   addLeave,
   deletePerson,
+  createEmployeeAsAdmin,
   ensureAdminAccount,
   isFirebaseEnabled,
   login,
+  logout,
+  mapAuthError,
   patchPerson,
+  registerEmployee,
   removeAccessGrant,
   removeBonusLeave,
   removeDutyWeek,
@@ -24,6 +28,8 @@ import {
   updateLeave,
   savePerson,
   setPersonPassword,
+  startAuth,
+  subscribeAuthSession,
   subscribePeople,
   subscribePerson,
   subscribeStats,
@@ -71,8 +77,10 @@ export default function App() {
   const [person, setPerson] = useState(null);
   const [mode, setMode] = useState(isFirebaseEnabled ? "shared" : "local");
   const [error, setError] = useState("");
+  const [setupError, setSetupError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState(loadSession);
+  const [session, setSession] = useState(() => (isFirebaseEnabled ? null : loadSession()));
+  const [authReady, setAuthReady] = useState(!isFirebaseEnabled);
   const [selectedId, setSelectedId] = useState("");
   const [showLogin, setShowLogin] = useState(false);
   const [showSignup, setShowSignup] = useState(false);
@@ -98,13 +106,37 @@ export default function App() {
   const showTeamBoard = isPl && employeeView === "team";
 
   useEffect(() => {
-    ensureAdminAccount().catch(() => {});
+    ensureAdminAccount().catch((authError) => {
+      const code = authError?.code || "";
+      if (code === "auth/configuration-not-found" || code === "auth/operation-not-allowed") {
+        setSetupError(mapAuthError(authError).message);
+      }
+    });
     return subscribeStats(({ stats: next, mode: nextMode, error: nextError }) => {
       setStats({ ta: next?.ta || 0, dba: next?.dba || 0 });
       setMode(nextMode);
       setError(nextError || "");
       setLoading(false);
     });
+  }, []);
+
+  useEffect(() => {
+    if (!isFirebaseEnabled) return undefined;
+    let unsub = () => {};
+    let cancelled = false;
+    startAuth()
+      .catch(() => {})
+      .then(() => {
+        if (cancelled) return;
+        unsub = subscribeAuthSession((next) => {
+          setSession(next);
+          setAuthReady(true);
+        });
+      });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, []);
 
   useEffect(() => {
@@ -143,9 +175,13 @@ export default function App() {
     : [];
 
   function persistSession(next) {
+    if (!isFirebaseEnabled) {
+      if (next) sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
+      else sessionStorage.removeItem(SESSION_KEY);
+    } else if (!next) {
+      logout().catch(() => {});
+    }
     setSession(next);
-    if (next) sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
-    else sessionStorage.removeItem(SESSION_KEY);
     setSelectedId("");
     setAdminView("dashboard");
     setEmployeeView("home");
@@ -164,21 +200,27 @@ export default function App() {
     const username = normalizeUsername(fields.username);
     if (!username) throw new Error("아이디를 입력하세요.");
     if (await usernameTaken(username)) throw new Error("이미 있는 아이디입니다.");
-    if (!fields.password) throw new Error("비밀번호를 입력하세요.");
+    if (!fields.password || fields.password.length < 6) {
+      throw new Error("비밀번호는 6자 이상이어야 합니다.");
+    }
     if (!fields.team) throw new Error("팀을 선택하세요.");
     const personData = newPerson({
       ...fields,
       username,
-      passwordHash: await hashPassword(fields.password),
+      passwordHash: isFirebaseEnabled ? "" : await hashPassword(fields.password),
     });
     setBusy(true);
     try {
-      await savePerson(personData);
-      persistSession({
-        type: "employee",
-        username: personData.username,
-        personId: personData.id,
-      });
+      if (isFirebaseEnabled) {
+        persistSession(await registerEmployee(personData, fields.password));
+      } else {
+        await savePerson(personData);
+        persistSession({
+          type: "employee",
+          username: personData.username,
+          personId: personData.id,
+        });
+      }
       setShowSignup(false);
       setSignupDraft(null);
     } finally {
@@ -190,18 +232,21 @@ export default function App() {
     const username = normalizeUsername(fields.username);
     if (!username) throw new Error("아이디를 입력하세요.");
     if (await usernameTaken(username)) throw new Error("이미 있는 아이디입니다.");
-    if (!fields.password) throw new Error("비밀번호를 입력하세요.");
+    if (!fields.password || fields.password.length < 6) {
+      throw new Error("비밀번호는 6자 이상이어야 합니다.");
+    }
     const personData = newPerson({
       ...fields,
       username,
-      passwordHash: await hashPassword(fields.password),
+      passwordHash: isFirebaseEnabled ? "" : await hashPassword(fields.password),
     });
     if (people.some((p) => p.name === personData.name)) {
       throw new Error("같은 이름이 이미 있습니다.");
     }
     setBusy(true);
     try {
-      await savePerson(personData);
+      if (isFirebaseEnabled) await createEmployeeAsAdmin(personData, fields.password);
+      else await savePerson(personData);
       setSheet(null);
     } finally {
       setBusy(false);
@@ -383,9 +428,9 @@ export default function App() {
         </div>
       </header>
 
-      {error && <div className="warning">{error}</div>}
+      {(setupError || error) && <div className="warning">{setupError || error}</div>}
 
-      {loading ? (
+      {loading || !authReady ? (
         <div className="empty">불러오는 중…</div>
       ) : isEmployee && !selected ? (
         <div className="empty">불러오는 중…</div>
@@ -1536,6 +1581,7 @@ function PersonSheet({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="new-password"
+              minLength={6}
               required
             />
           </label>
@@ -1585,8 +1631,8 @@ function PasswordResetSheet({ name, busy, onClose, onSubmit }) {
   async function submit(event) {
     event.preventDefault();
     setError("");
-    if (password.length < 4) {
-      setError("비밀번호를 4자 이상 입력하세요.");
+    if (password.length < 6) {
+      setError("비밀번호를 6자 이상 입력하세요.");
       return;
     }
     try {
@@ -1607,6 +1653,7 @@ function PasswordResetSheet({ name, busy, onClose, onSubmit }) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="new-password"
+            minLength={6}
             autoFocus
             required
           />

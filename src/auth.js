@@ -51,3 +51,16 @@ export function normalizeUsername(value) {
 export function usernameKey(username) {
   return normalizeUsername(username).replace(/\./g, ",");
 }
+
+const AUTH_EMAIL_DOMAIN = "users.company-vacation.app";
+
+export const ADMIN_AUTH_EMAIL = `admin@${AUTH_EMAIL_DOMAIN}`;
+
+export function authEmailFor(username, uniqueId) {
+  const local = normalizeUsername(username);
+  const suffix = String(uniqueId || "user")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 20);
+  return `${local}.${suffix}@${AUTH_EMAIL_DOMAIN}`;
+}
